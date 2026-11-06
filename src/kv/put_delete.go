@@ -161,9 +161,10 @@ func (db *DB) commitBatchLocked(ops []Op) error {
 	// 6. Publish index changes in operation order
 	db.index.ApplyUpdates(pendingUpdates)
 
-	// 7. Advance committed end and transaction ID
+	// 7. Advance committed end, transaction ID, and transaction count
 	db.committedEnd += int64(totalTxBytes)
 	db.nextTxID++
+	db.txCount++
 
 	return nil
 }

@@ -529,3 +529,85 @@ func TestDB_InjectedSyncFailureOnTransactionPath(t *testing.T) {
 		t.Fatalf("expected ErrPoisoned on subsequent Batch, got %v", err)
 	}
 }
+
+func TestDB_CheckIntegrity(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "check_test.db")
+
+	// 1. Initial empty database: Check must pass
+	db, _, err := Open(dbPath, Options{})
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	if err := db.Check(); err != nil {
+		t.Fatalf("Check on empty database failed: %v", err)
+	}
+
+	// 2. Add multiple transactions: Check must pass
+	if err := db.Put([]byte("key1"), []byte("value1")); err != nil {
+		t.Fatalf("Put key1 failed: %v", err)
+	}
+	if err := db.Batch([]Op{
+		{Kind: PutOp, Key: []byte("batch_k1"), Value: []byte("batch_v1")},
+		{Kind: DeleteOp, Key: []byte("key1")},
+	}); err != nil {
+		t.Fatalf("Batch failed: %v", err)
+	}
+	if err := db.Check(); err != nil {
+		t.Fatalf("Check after transactions failed: %v", err)
+	}
+
+	// Verify Stats
+	stats := db.Stats()
+	if stats.TxCount != 2 {
+		t.Fatalf("expected TxCount 2, got %d", stats.TxCount)
+	}
+
+	if err := db.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
+	}
+
+	// 3. Corrupt a byte in the middle of a transaction payload
+	f, err := os.OpenFile(dbPath, os.O_RDWR, 0644)
+	if err != nil {
+		t.Fatalf("failed to open raw file: %v", err)
+	}
+	fi, _ := f.Stat()
+	corruptOffset := fi.Size() - 40 // In the middle of payload/footer
+	var originalByte [1]byte
+	_, _ = f.ReadAt(originalByte[:], corruptOffset)
+	_, _ = f.WriteAt([]byte{originalByte[0] ^ 0xFF}, corruptOffset)
+	_ = f.Sync()
+	_ = f.Close()
+
+	// Reopen with ReadOnly to inspect Check failure
+	dbCorrupt, _, err := Open(dbPath, Options{ReadOnly: true})
+	if err != nil {
+		// If Open itself refused to open due to corrupt tail, verify error
+		if !errors.Is(err, ErrCorrupt) {
+			t.Fatalf("expected ErrCorrupt on Open, got %v", err)
+		}
+	} else {
+		defer dbCorrupt.Close()
+		chkErr := dbCorrupt.Check()
+		if chkErr == nil {
+			t.Fatalf("expected Check to detect corruption, but got nil")
+		}
+		if !errors.Is(chkErr, ErrCorrupt) {
+			t.Fatalf("expected ErrCorrupt, got %v", chkErr)
+		}
+	}
+
+	// 4. Test Check with physical size smaller than FileHeader
+	shortPath := filepath.Join(dir, "short.db")
+	if err := os.WriteFile(shortPath, []byte("short"), 0644); err != nil {
+		t.Fatalf("failed to write short file: %v", err)
+	}
+	_, _, err = Open(shortPath, Options{ReadOnly: true})
+	if err == nil {
+		t.Fatalf("expected Open of short file to fail")
+	}
+	if !errors.Is(err, ErrCorrupt) {
+		t.Fatalf("expected ErrCorrupt for short file, got %v", err)
+	}
+}

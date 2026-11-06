@@ -22,6 +22,8 @@ type DB struct {
 
 	committedEnd int64  // Byte offset of the last validated committed transaction
 	nextTxID     uint64 // Next sequential transaction ID to assign
+	txCount      uint64 // Number of committed transactions in this file
+	compactionCount uint64 // Number of successful compactions executed
 	maxFileBytes uint64 // Configured file size limit (0 = unlimited)
 	readOnly     bool   // If true, mutation operations are rejected
 
@@ -106,10 +108,14 @@ func Open(path string, opts Options) (Engine, OpenInfo, error) {
 		openInfo.LiveKeyCount = 0
 	} else {
 		// Reopening existing file: read and validate immutable file header
+		if fi.Size() < FileHeaderSize {
+			_ = db.Close()
+			return nil, OpenInfo{}, fmt.Errorf("%w: file size %d smaller than 32-byte header", ErrCorrupt, fi.Size())
+		}
 		headerBuf := make([]byte, FileHeaderSize)
 		if err := ReadAtFull(db.file, headerBuf, 0); err != nil {
 			_ = db.Close()
-			return nil, OpenInfo{}, fmt.Errorf("failed to read file header: %w", err)
+			return nil, OpenInfo{}, fmt.Errorf("%w: failed to read file header: %v", ErrCorrupt, err)
 		}
 		header, err := DecodeFileHeader(headerBuf)
 		if err != nil {
@@ -174,7 +180,7 @@ func (db *DB) checkStateLocked() error {
 		return ErrClosed
 	}
 	if db.poisoned != nil {
-		return fmt.Errorf("%w: %v", ErrPoisoned, db.poisoned)
+		return fmt.Errorf("%w: %w", ErrPoisoned, db.poisoned)
 	}
 	return nil
 }
@@ -196,8 +202,8 @@ func (db *DB) Stats() Stats {
 		FileSizeBytes:   size,
 		MaxFileBytes:    db.maxFileBytes,
 		LastTxID:        db.nextTxID - 1,
-		TxCount:         db.nextTxID - 1,
-		CompactionCount: 0,
+		TxCount:         db.txCount,
+		CompactionCount: db.compactionCount,
 	}
 }
 
@@ -209,14 +215,99 @@ func (db *DB) Check() error {
 		return err
 	}
 
-	// Verify FileHeader
+	fi, err := db.file.Stat()
+	if err != nil {
+		return fmt.Errorf("check: stat failed: %w", err)
+	}
+	if fi.Size() < FileHeaderSize {
+		return fmt.Errorf("%w: check: file size %d smaller than header", ErrCorrupt, fi.Size())
+	}
+	if fi.Size() != db.committedEnd {
+		return fmt.Errorf("%w: check: physical file size %d does not match committed end %d", ErrCorrupt, fi.Size(), db.committedEnd)
+	}
+
+	// 1. Verify FileHeader
 	headerBuf := make([]byte, FileHeaderSize)
 	if err := ReadAtFull(db.file, headerBuf, 0); err != nil {
-		return fmt.Errorf("check: %w", err)
+		return fmt.Errorf("check: read file header: %w", err)
 	}
 	if _, err := DecodeFileHeader(headerBuf); err != nil {
-		return fmt.Errorf("check: %w", err)
+		return fmt.Errorf("check: decode file header: %w", err)
 	}
+
+	// 2. Scan and verify each committed transaction
+	offset := int64(FileHeaderSize)
+	for offset < db.committedEnd {
+		if offset+int64(TxnHeaderSize) > db.committedEnd {
+			return fmt.Errorf("%w: check: truncated transaction header at offset %d", ErrCorrupt, offset)
+		}
+		txnHeaderBuf := make([]byte, TxnHeaderSize)
+		if err := ReadAtFull(db.file, txnHeaderBuf, offset); err != nil {
+			return fmt.Errorf("check: read txn header at %d: %w", offset, err)
+		}
+		txnHeader, err := DecodeTxnHeader(txnHeaderBuf)
+		if err != nil {
+			return fmt.Errorf("check: decode txn header at %d: %w", offset, err)
+		}
+
+		totalTxBytes := int64(TxnHeaderSize) + int64(txnHeader.PayloadLen) + int64(CommitFooterSize)
+		if offset+totalTxBytes > db.committedEnd {
+			return fmt.Errorf("%w: check: transaction at %d exceeds committed end %d", ErrCorrupt, offset, db.committedEnd)
+		}
+
+		payloadBuf := make([]byte, txnHeader.PayloadLen)
+		if err := ReadAtFull(db.file, payloadBuf, offset+int64(TxnHeaderSize)); err != nil {
+			return fmt.Errorf("check: read payload at %d: %w", offset, err)
+		}
+
+		// Verify individual operations in payload
+		cur := 0
+		for cur < len(payloadBuf) {
+			_, consumed, opErr := DecodeOp(payloadBuf[cur:])
+			if opErr != nil {
+				return fmt.Errorf("check: decode op in txn %d at offset %d: %w", txnHeader.TxID, offset+int64(TxnHeaderSize)+int64(cur), opErr)
+			}
+			cur += consumed
+		}
+
+		footerBuf := make([]byte, CommitFooterSize)
+		footerOffset := offset + int64(TxnHeaderSize) + int64(txnHeader.PayloadLen)
+		if err := ReadAtFull(db.file, footerBuf, footerOffset); err != nil {
+			return fmt.Errorf("check: read footer at %d: %w", footerOffset, err)
+		}
+		footer, err := DecodeCommitFooter(footerBuf)
+		if err != nil {
+			return fmt.Errorf("check: decode footer at %d: %w", footerOffset, err)
+		}
+
+		if footer.TxID != txnHeader.TxID {
+			return fmt.Errorf("%w: check: footer TxID %d mismatch header TxID %d at offset %d", ErrCorrupt, footer.TxID, txnHeader.TxID, offset)
+		}
+		if footer.TotalTxBytes != uint64(totalTxBytes) {
+			return fmt.Errorf("%w: check: footer total bytes %d mismatch calculated %d at offset %d", ErrCorrupt, footer.TotalTxBytes, totalTxBytes, offset)
+		}
+
+		// Dual CRC verification
+		h := crc32.NewIEEE()
+		h.Write(txnHeaderBuf)
+		h.Write(payloadBuf)
+		computedTxnCRC := h.Sum32()
+		if computedTxnCRC != footer.TxnCRC {
+			return fmt.Errorf("%w: check: txn CRC mismatch at %d (expected %08x, got %08x)", ErrCorrupt, offset, footer.TxnCRC, computedTxnCRC)
+		}
+
+		computedFooterCRC := crc32.ChecksumIEEE(footerBuf[0:28])
+		if computedFooterCRC != footer.FooterCRC {
+			return fmt.Errorf("%w: check: footer CRC mismatch at %d (expected %08x, got %08x)", ErrCorrupt, footerOffset, footer.FooterCRC, computedFooterCRC)
+		}
+
+		offset += totalTxBytes
+	}
+
+	if offset != db.committedEnd {
+		return fmt.Errorf("%w: check: traversed offset %d != committedEnd %d", ErrCorrupt, offset, db.committedEnd)
+	}
+
 	return nil
 }
 
@@ -397,6 +488,7 @@ func (db *DB) recoverAndRepairLocked() (OpenInfo, error) {
 
 	db.committedEnd = offset
 	db.nextTxID = lastTxID + 1
+	db.txCount = txCount
 
 	return OpenInfo{
 		Recreated:             false,
