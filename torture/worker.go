@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	"github.com/madhuharshag/Team-Innovexa/src/kv"
@@ -44,8 +45,14 @@ func runWorkerProcess() {
 				continue
 			}
 			dbPath := parts[1]
+			opts := kv.Options{}
+			if len(parts) > 2 {
+				if mb, err := strconv.ParseUint(parts[2], 10, 64); err == nil {
+					opts.MaxFileBytes = mb
+				}
+			}
 			var err error
-			db, _, err = kv.Open(dbPath, kv.Options{})
+			db, _, err = kv.Open(dbPath, opts)
 			if err != nil {
 				respond("ERR 0 open failed: %v", err)
 				continue

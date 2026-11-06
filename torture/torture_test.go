@@ -117,7 +117,7 @@ func TestTorture_4_5_LaunchAndForcedTermination(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "kill_test.db")
 
-	worker, err := StartWorker(dbPath)
+	worker, err := StartWorker(dbPath, 0)
 	if err != nil {
 		t.Fatalf("StartWorker failed: %v", err)
 	}
@@ -173,7 +173,7 @@ func TestTorture_6_7_FreshProcessRecoveryAndAckSurvival(t *testing.T) {
 	}
 	defer oracle.Close()
 
-	worker, err := StartWorker(dbPath)
+	worker, err := StartWorker(dbPath, 0)
 	if err != nil {
 		t.Fatalf("StartWorker failed: %v", err)
 	}

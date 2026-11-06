@@ -46,6 +46,7 @@ type OpRecord struct {
 
 // HarnessConfig defines parameters controlling the torture test run.
 type HarnessConfig struct {
+	Mode               string        `json:"mode"`
 	Seed               int64         `json:"seed"`
 	TotalOps           int           `json:"total_ops"`
 	Crashes            int           `json:"crashes"`
@@ -59,10 +60,12 @@ type HarnessConfig struct {
 	MaxKeyLen          int           `json:"max_key_len"`
 	MaxValueLen        int           `json:"max_value_len"`
 	MaxBatchOps        int           `json:"max_batch_ops"`
+	MaxFileBytes       uint64        `json:"max_file_bytes"`
 }
 
 // HarnessReport encapsulates the final audit results and environment metrics.
 type HarnessReport struct {
+	Mode             string        `json:"mode"`
 	Seed             int64         `json:"seed"`
 	GoVersion        string        `json:"go_version"`
 	OSArch           string        `json:"os_arch"`

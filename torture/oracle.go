@@ -165,37 +165,7 @@ func (o *Oracle) Verify(dbPath string) error {
 		return fmt.Errorf("oracle verify: database Check() integrity failed: %w", err)
 	}
 
-	// 3. Verify every acknowledged Put survives with exact byte content
-	for k, expectedVal := range o.ackedKeys {
-		actualVal, err := db.Get([]byte(k))
-		if err != nil {
-			if errors.Is(err, kv.ErrNotFound) {
-				return fmt.Errorf("oracle verify: acknowledged key %q was lost after recovery", k)
-			}
-			return fmt.Errorf("oracle verify: Get for acknowledged key %q failed: %w", k, err)
-		}
-		if !bytes.Equal(actualVal, expectedVal) {
-			return fmt.Errorf("oracle verify: acknowledged key %q value mismatch: got CRC %08x (len %d), want CRC %08x (len %d)",
-				k, crc32.ChecksumIEEE(actualVal), len(actualVal),
-				crc32.ChecksumIEEE(expectedVal), len(expectedVal))
-		}
-	}
-
-	// 4. Verify every acknowledged Delete remains deleted (ErrNotFound)
-	for k := range o.ackedDeletes {
-		// Only check if key was not subsequently re-Put
-		if _, reAdded := o.ackedKeys[k]; !reAdded {
-			val, err := db.Get([]byte(k))
-			if err == nil {
-				return fmt.Errorf("oracle verify: acknowledged deleted key %q is present with value len %d", k, len(val))
-			}
-			if !errors.Is(err, kv.ErrNotFound) {
-				return fmt.Errorf("oracle verify: unexpected error checking deleted key %q: %w", k, err)
-			}
-		}
-	}
-
-	// 5. Verify batch atomicity for indeterminate batches (All-or-Nothing rule)
+	// 3. Resolve any indeterminate atomic batches first (All-or-Nothing rule)
 	for _, ind := range o.indeterminateOps {
 		if ind.Kind == OpBatch && len(ind.BatchOps) > 0 {
 			appliedCount := 0
@@ -217,38 +187,90 @@ func (o *Oracle) Verify(dbPath string) error {
 				return fmt.Errorf("oracle verify: atomic batch %d violated: %d of %d ops applied (partial batch exposed!)",
 					ind.BatchID, appliedCount, len(ind.BatchOps))
 			}
-		}
-	}
-
-	// 6. Scan all keys in database to verify no invented/phantom keys exist
-	discoveredCount := 0
-	err = db.Scan(func(k, v []byte) error {
-		discoveredCount++
-		keyStr := string(k)
-		// Key must be in ackedKeys OR belong to an in-flight indeterminate Put
-		if _, exists := o.ackedKeys[keyStr]; exists {
-			return nil
-		}
-
-		// Check if it was from an indeterminate op
-		for _, ind := range o.indeterminateOps {
-			if ind.Kind == OpPut && ind.Key == keyStr && bytes.Equal(v, ind.Value) {
-				return nil
-			}
-			if ind.Kind == OpBatch {
+			if appliedCount == len(ind.BatchOps) {
+				// The in-flight batch committed before process death. Adopt its state.
 				for _, bOp := range ind.BatchOps {
-					if bOp.Kind == OpPut && bOp.Key == keyStr && bytes.Equal(v, bOp.Value) {
-						return nil
+					if bOp.Kind == OpPut {
+						valCopy := make([]byte, len(bOp.Value))
+						copy(valCopy, bOp.Value)
+						o.ackedKeys[bOp.Key] = valCopy
+						delete(o.ackedDeletes, bOp.Key)
+					} else if bOp.Kind == OpDelete {
+						delete(o.ackedKeys, bOp.Key)
+						o.ackedDeletes[bOp.Key] = true
 					}
 				}
 			}
 		}
+	}
 
+	// 4. Resolve indeterminate single Puts and Deletes
+	for _, ind := range o.indeterminateOps {
+		if ind.Kind == OpPut {
+			actualVal, err := db.Get([]byte(ind.Key))
+			if err == nil && bytes.Equal(actualVal, ind.Value) {
+				// The in-flight Put committed before process death. Adopt into ackedKeys.
+				valCopy := make([]byte, len(ind.Value))
+				copy(valCopy, ind.Value)
+				o.ackedKeys[ind.Key] = valCopy
+				delete(o.ackedDeletes, ind.Key)
+			}
+		} else if ind.Kind == OpDelete {
+			_, err := db.Get([]byte(ind.Key))
+			if errors.Is(err, kv.ErrNotFound) {
+				// The in-flight Delete committed. Adopt into ackedDeletes.
+				delete(o.ackedKeys, ind.Key)
+				o.ackedDeletes[ind.Key] = true
+			}
+		}
+	}
+
+	// 5. Verify every acknowledged Put survives with exact byte content
+	for k, expectedVal := range o.ackedKeys {
+		actualVal, err := db.Get([]byte(k))
+		if err != nil {
+			if errors.Is(err, kv.ErrNotFound) {
+				return fmt.Errorf("oracle verify: acknowledged key %q was lost after recovery", k)
+			}
+			return fmt.Errorf("oracle verify: Get for acknowledged key %q failed: %w", k, err)
+		}
+		if !bytes.Equal(actualVal, expectedVal) {
+			return fmt.Errorf("oracle verify: acknowledged key %q value mismatch: got CRC %08x (len %d), want CRC %08x (len %d)",
+				k, crc32.ChecksumIEEE(actualVal), len(actualVal),
+				crc32.ChecksumIEEE(expectedVal), len(expectedVal))
+		}
+	}
+
+	// 6. Verify every acknowledged Delete remains deleted (ErrNotFound)
+	for k := range o.ackedDeletes {
+		if _, reAdded := o.ackedKeys[k]; !reAdded {
+			val, err := db.Get([]byte(k))
+			if err == nil {
+				return fmt.Errorf("oracle verify: acknowledged deleted key %q is present with value len %d", k, len(val))
+			}
+			if !errors.Is(err, kv.ErrNotFound) {
+				return fmt.Errorf("oracle verify: unexpected error checking deleted key %q: %w", k, err)
+			}
+		}
+	}
+
+	// 7. Scan all keys in database to verify no invented/phantom keys exist
+	err = db.Scan(func(k, v []byte) error {
+		keyStr := string(k)
+		if expectedVal, exists := o.ackedKeys[keyStr]; exists {
+			if !bytes.Equal(v, expectedVal) {
+				return fmt.Errorf("oracle verify: scanned key %q value mismatch", keyStr)
+			}
+			return nil
+		}
 		return fmt.Errorf("oracle verify: invented/corrupted key %q found in database (not acknowledged or submitted)", keyStr)
 	})
 	if err != nil {
 		return err
 	}
+
+	// Clear resolved indeterminate ops for next cycle
+	o.indeterminateOps = nil
 
 	return nil
 }
