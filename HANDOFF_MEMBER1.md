@@ -73,7 +73,7 @@ Offset  Size  Field
    $$\text{Total Transaction Bytes} = 64 + \sum (7 + \text{len(key)} + \text{len(val)})$$
 2. **Mutex Calling Convention:** Internal transaction commit helpers (`commitBatchLocked`) are invoked with `db.mu` **already held**. **Do NOT re-acquire `db.mu`** inside internal transaction methods.
 3. **No Intermediate Index Publication:** Never apply updates to `db.index` until `SyncFile(db.file)` has successfully returned.
-4. **Crash Semantics:** A complete valid transaction (including valid matching footer and dual CRCs) found during recovery is valid history even if the prior process crashed before returning success to the caller or before the CLI printed ACK.
+4. **Crash Semantics:** A complete valid transaction (including valid matching footer and dual CRCs) found during recovery is valid history even if the prior process crashed before returning success to the caller or before the CLI printed ACK. Being killed during Sync does not by itself mean the transaction is absent; if footer bytes and valid dual CRCs reached disk before termination, recovery restores the transaction. Incomplete final transactions are cleanly truncated and discarded.
 5. **Tail Repair:** When recovery encounters an incomplete or torn tail, `db.file` is truncated to `committedEnd` and synced before new writes are accepted. If in read-only mode, the handle is poisoned.
 6. **Compaction Protocol (Coordinated Ownership):**
    Member 2 owns `Compact()`. For the tested Linux/WSL2 target, compaction must follow this exact sequence:
@@ -151,8 +151,8 @@ err = engine.Batch([]kv.Op{
 ```
 
 ### Critical CLI Rules:
-- **ACK Rule:** Emit `ACK <op-id>` **only** after `engine.Put` or `engine.Batch` returns `nil`.
-- **Missing Get vs Error:** Missing keys produce `NOTFOUND` output. Real I/O errors must be distinguished and reported as failures.
+- **ACK Rule:** Print exactly `ACK <op-id>\n` replacing `<op-id>` with the real submitted request ID. Do not print an empty ACK. Emit ACK **only** after `engine.Put` or `engine.Batch` returns `nil`.
+- **Missing Get Output:** Standalone `get <key>` prints the exact value followed by newline on success, or exactly `NOTFOUND\n` on missing key.
 - **No Automatic Retry on Uncertain:** If an operation returns `kv.ErrUncertain`, the CLI must **not** automatically retry, as the transaction may have already reached disk.
 
 ---
@@ -184,3 +184,4 @@ err = engine.Batch([]kv.Op{
   - `BenchmarkDB_Batch100`: 100 operations. Keys `k0`..`k9` (2B) + `k10`..`k99` (3B); values `v0`..`v9` (2B) + `v10`..`v99` (3B). Total transaction size is exactly $64 + 10 \times (7+2+2) + 90 \times (7+3+3) = 64 + 110 + 1170 = 1344$ bytes.
   - Measured on Apple M4 (macOS Darwin arm64) with `File.Sync` enabled. Local microbenchmarks do not prove physical SSD power-loss safety or 1M-key recovery speed.
 - **Timing Measurement:** `OpenInfo.RecoveryDurationNs` measures the elapsed wall-clock nanoseconds from entering `Open()` through file opening, header validation, transaction recovery replay, tail repair, and index population.
+- **Scalability Status:** The in-memory index stores 64-bit offsets and 32-bit lengths rather than values. Full dataset scaling to 1,000,000 keys is supported by design, but timed recovery under 2 seconds remains unverified until measured on the judging laptop.
