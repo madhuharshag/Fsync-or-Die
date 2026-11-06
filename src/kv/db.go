@@ -20,12 +20,12 @@ type DB struct {
 	lockFile *os.File // Advisory process lock file (<path>.lock)
 	index    *Index   // RAM key-to-offset index
 
-	committedEnd int64  // Byte offset of the last validated committed transaction
-	nextTxID     uint64 // Next sequential transaction ID to assign
-	txCount      uint64 // Number of committed transactions in this file
+	committedEnd    int64  // Byte offset of the last validated committed transaction
+	nextTxID        uint64 // Next sequential transaction ID to assign
+	txCount         uint64 // Number of committed transactions in this file
 	compactionCount uint64 // Number of successful compactions executed
-	maxFileBytes uint64 // Configured file size limit (0 = unlimited)
-	readOnly     bool   // If true, mutation operations are rejected
+	maxFileBytes    uint64 // Configured file size limit (0 = unlimited)
+	readOnly        bool   // If true, mutation operations are rejected
 
 	closed   bool  // Marked true after Close() finishes
 	poisoned error // Non-nil if a fatal, unrecoverable I/O failure occurred
