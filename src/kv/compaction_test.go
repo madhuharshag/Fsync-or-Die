@@ -216,3 +216,228 @@ func TestCompaction_ReadOnlyRejection(t *testing.T) {
 		t.Fatalf("Expected ErrInvalid when compacting read-only db, got: %v", err)
 	}
 }
+
+func TestCompaction_ByteBoundarySplitting(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "byte_boundary.db")
+
+	engine, _, err := Open(dbPath, Options{})
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer engine.Close()
+
+	// Insert 20 keys with 60-byte values (each op ~ 78 bytes)
+	for i := 0; i < 20; i++ {
+		k := []byte(fmt.Sprintf("split_key_%02d", i))
+		v := bytes.Repeat([]byte("X"), 60)
+		if err := engine.Put(k, v); err != nil {
+			t.Fatalf("Put failed: %v", err)
+		}
+	}
+
+	// Override compaction thresholds to force splitting across multiple transactions.
+	// Threshold: 300 bytes payload (~3-4 ops per transaction).
+	oldBatchBytes := compactionBatchBytes
+	oldBatchOps := compactionBatchOps
+	compactionBatchBytes = 300
+	compactionBatchOps = 1000
+	defer func() {
+		compactionBatchBytes = oldBatchBytes
+		compactionBatchOps = oldBatchOps
+	}()
+
+	if err := engine.Compact(); err != nil {
+		t.Fatalf("Compact failed: %v", err)
+	}
+
+	// Verify all 20 keys survive intact with exact values
+	for i := 0; i < 20; i++ {
+		k := []byte(fmt.Sprintf("split_key_%02d", i))
+		expected := bytes.Repeat([]byte("X"), 60)
+		val, err := engine.Get(k)
+		if err != nil || !bytes.Equal(val, expected) {
+			t.Fatalf("Mismatch on %s: got %v (len %d), want len %d", k, err, len(val), len(expected))
+		}
+	}
+}
+
+func TestCompaction_SingleMaxSizedValue(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "single_max_val.db")
+
+	engine, _, err := Open(dbPath, Options{})
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer engine.Close()
+
+	// Insert 1 MB value (MaxValueLen = 1024 * 1024)
+	largeVal := bytes.Repeat([]byte("M"), MaxValueLen)
+	if err := engine.Put([]byte("large_key"), largeVal); err != nil {
+		t.Fatalf("Put 1MB failed: %v", err)
+	}
+
+	if err := engine.Compact(); err != nil {
+		t.Fatalf("Compact with 1MB value failed: %v", err)
+	}
+
+	got, err := engine.Get([]byte("large_key"))
+	if err != nil {
+		t.Fatalf("Get 1MB failed: %v", err)
+	}
+	if len(got) != MaxValueLen || !bytes.Equal(got, largeVal) {
+		t.Fatalf("1MB value corrupted after compaction: got len %d, want %d", len(got), MaxValueLen)
+	}
+}
+
+func TestCompaction_MultipleLargeValues(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "multi_large_val.db")
+
+	engine, _, err := Open(dbPath, Options{})
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+
+	// Write three 500 KB values (total ~1.5 MB)
+	vSize := 500 * 1024
+	v1 := bytes.Repeat([]byte("A"), vSize)
+	v2 := bytes.Repeat([]byte("B"), vSize)
+	v3 := bytes.Repeat([]byte("C"), vSize)
+
+	if err := engine.Put([]byte("k1"), v1); err != nil {
+		t.Fatalf("Put k1 failed: %v", err)
+	}
+	if err := engine.Put([]byte("k2"), v2); err != nil {
+		t.Fatalf("Put k2 failed: %v", err)
+	}
+	if err := engine.Put([]byte("k3"), v3); err != nil {
+		t.Fatalf("Put k3 failed: %v", err)
+	}
+
+	// Delete k2
+	if err := engine.Delete([]byte("k2")); err != nil {
+		t.Fatalf("Delete k2 failed: %v", err)
+	}
+
+	fiBefore, _ := os.Stat(dbPath)
+	sizeBefore := fiBefore.Size()
+
+	if err := engine.Compact(); err != nil {
+		t.Fatalf("Compact failed: %v", err)
+	}
+
+	fiAfter, _ := os.Stat(dbPath)
+	sizeAfter := fiAfter.Size()
+
+	// File must shrink by at least the deleted 500 KB value
+	if sizeAfter >= sizeBefore {
+		t.Fatalf("Expected file to shrink: before=%d, after=%d", sizeBefore, sizeAfter)
+	}
+
+	// Reopen to verify recovery from disk
+	_ = engine.Close()
+	reopened, info, err := Open(dbPath, Options{})
+	if err != nil {
+		t.Fatalf("Reopen failed: %v", err)
+	}
+	defer reopened.Close()
+
+	if info.LiveKeyCount != 2 {
+		t.Fatalf("Expected 2 live keys, got %d", info.LiveKeyCount)
+	}
+
+	// k2 must be not found
+	if _, err := reopened.Get([]byte("k2")); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Expected ErrNotFound for k2, got %v", err)
+	}
+
+	// k1 and k3 must match exactly
+	got1, err := reopened.Get([]byte("k1"))
+	if err != nil || !bytes.Equal(got1, v1) {
+		t.Fatalf("k1 mismatch: got len %d, want %d", len(got1), len(v1))
+	}
+	got3, err := reopened.Get([]byte("k3"))
+	if err != nil || !bytes.Equal(got3, v3) {
+		t.Fatalf("k3 mismatch: got len %d, want %d", len(got3), len(v3))
+	}
+}
+
+func TestCompaction_OperationIndividuallyTooLarge(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "too_large_op.db")
+
+	engine, _, err := Open(dbPath, Options{})
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer engine.Close()
+
+	// Insert a 10 KB value
+	largeVal := bytes.Repeat([]byte("L"), 10*1024)
+	if err := engine.Put([]byte("large_key"), largeVal); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+
+	// Set compactionBatchBytes lower than the single op size (e.g. 5 KB)
+	oldBytes := compactionBatchBytes
+	compactionBatchBytes = 5 * 1024
+	defer func() {
+		compactionBatchBytes = oldBytes
+	}()
+
+	// Compaction must return ErrInvalid and fail cleanly
+	err = engine.Compact()
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("expected ErrInvalid when operation exceeds compaction batch byte policy, got: %v", err)
+	}
+
+	// The original database must remain intact and completely readable
+	val, err := engine.Get([]byte("large_key"))
+	if err != nil || !bytes.Equal(val, largeVal) {
+		t.Fatalf("original key corrupted after rejected compaction: %v", err)
+	}
+}
+
+func TestCompaction_ManySmallValuesOpCountLimit(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "many_small_ops.db")
+
+	engine, _, err := Open(dbPath, Options{})
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer engine.Close()
+
+	// Write 500 small keys
+	const totalKeys = 500
+	for i := 0; i < totalKeys; i++ {
+		k := []byte(fmt.Sprintf("k_%04d", i))
+		v := []byte(fmt.Sprintf("v_%04d", i))
+		if err := engine.Put(k, v); err != nil {
+			t.Fatalf("Put failed: %v", err)
+		}
+	}
+
+	// Constrain compaction to 50 operations per batch
+	oldOps := compactionBatchOps
+	compactionBatchOps = 50
+	defer func() {
+		compactionBatchOps = oldOps
+	}()
+
+	if err := engine.Compact(); err != nil {
+		t.Fatalf("Compact with 50-op batches failed: %v", err)
+	}
+
+	// Verify all 500 keys survive compaction
+	for i := 0; i < totalKeys; i++ {
+		k := []byte(fmt.Sprintf("k_%04d", i))
+		expected := fmt.Sprintf("v_%04d", i)
+		val, err := engine.Get(k)
+		if err != nil || string(val) != expected {
+			t.Fatalf("key %s corrupted or missing: got %q, want %q", k, val, expected)
+		}
+	}
+}

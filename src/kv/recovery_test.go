@@ -2,7 +2,9 @@ package kv
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
+	"hash/crc32"
 	"os"
 	"path/filepath"
 	"testing"
@@ -163,37 +165,135 @@ func TestRecovery_TornFooterOrCorruptCRC(t *testing.T) {
 
 func TestRecovery_OneByteTruncation_F4(t *testing.T) {
 	dir := t.TempDir()
-	dbPath := filepath.Join(dir, "one_byte_trunc.db")
+	dbPath := filepath.Join(dir, "one_byte_trunc_f4.db")
 
+	// 1. Establish acknowledged data using public API
 	engine, _, err := Open(dbPath, Options{})
 	if err != nil {
 		t.Fatalf("Open failed: %v", err)
 	}
-	_ = engine.Put([]byte("first"), []byte("value1"))
-	_ = engine.Put([]byte("second"), []byte("value2"))
-	_ = engine.Close()
-
-	fi, _ := os.Stat(dbPath)
-	originalSize := fi.Size()
-
-	// Truncate the file by 1 byte (Scenario F4)
-	if err := os.Truncate(dbPath, originalSize-1); err != nil {
-		t.Fatalf("Truncate failed: %v", err)
+	if err := engine.Put([]byte("first"), []byte("value1")); err != nil {
+		t.Fatalf("Put 'first' failed: %v", err)
+	}
+	if err := engine.Put([]byte("second_ack"), []byte("value2")); err != nil {
+		t.Fatalf("Put 'second_ack' failed: %v", err)
+	}
+	if err := engine.Close(); err != nil {
+		t.Fatalf("Close failed: %v", err)
 	}
 
+	fiAck, err := os.Stat(dbPath)
+	if err != nil {
+		t.Fatalf("Stat failed: %v", err)
+	}
+	ackSize := fiAck.Size()
+
+	// 2. Controlled test fixture: simulate an in-flight, unacknowledged trailing transaction
+	// appended to the end of the file by a process that died mid-operation.
+	// We directly append unacknowledged bytes to disk without calling the public Put method.
+	unackOp := Op{
+		Kind:  PutOp,
+		Key:   []byte("unack_in_flight_key"),
+		Value: []byte("unack_in_flight_value_payload"),
+	}
+	encOp, err := EncodeOp(unackOp)
+	if err != nil {
+		t.Fatalf("EncodeOp failed: %v", err)
+	}
+	payloadLen := uint64(len(encOp))
+	totalTxBytes := uint64(TxnHeaderSize) + payloadLen + uint64(CommitFooterSize)
+
+	txnHeader := TxnHeader{
+		Magic:      TxnHeaderMagic,
+		Version:    CurrentTxnVersion,
+		Flags:      0,
+		TxID:       3, // Next sequential TxID
+		OpCount:    1,
+		Reserved:   0,
+		PayloadLen: payloadLen,
+	}
+	headerBytes := EncodeTxnHeader(txnHeader)
+
+	crcHasher := crc32.NewIEEE()
+	crcHasher.Write(headerBytes)
+	crcHasher.Write(encOp)
+	txnCRC := crcHasher.Sum32()
+
+	footer := NewCommitFooter(3, totalTxBytes, txnCRC)
+	footerBytes := EncodeCommitFooter(footer)
+
+	// Append complete unacknowledged transaction bytes directly to the file
+	rawFile, err := os.OpenFile(dbPath, os.O_WRONLY|os.O_APPEND, 0644)
+	if err != nil {
+		t.Fatalf("OpenFile for fixture failed: %v", err)
+	}
+	if _, err := rawFile.Write(headerBytes); err != nil {
+		t.Fatalf("Write header failed: %v", err)
+	}
+	if _, err := rawFile.Write(encOp); err != nil {
+		t.Fatalf("Write op failed: %v", err)
+	}
+	if _, err := rawFile.Write(footerBytes); err != nil {
+		t.Fatalf("Write footer failed: %v", err)
+	}
+	_ = rawFile.Close()
+
+	fiWithTail, err := os.Stat(dbPath)
+	if err != nil {
+		t.Fatalf("Stat with tail failed: %v", err)
+	}
+	totalWithTailSize := fiWithTail.Size()
+
+	// 3. Truncate exactly one byte from the incomplete trailing transaction
+	// This simulates a lost tail byte from an unacknowledged write before flush/return
+	if err := os.Truncate(dbPath, totalWithTailSize-1); err != nil {
+		t.Fatalf("Truncate 1 byte failed: %v", err)
+	}
+
+	// 4. Reopen and verify recovery behavior
 	reopened, info, err := Open(dbPath, Options{})
 	if err != nil {
-		t.Fatalf("Open failed on 1-byte truncated file: %v", err)
+		t.Fatalf("Open failed on 1-byte truncated tail: %v", err)
 	}
 	defer reopened.Close()
 
-	// First key must survive
-	val, err := reopened.Get([]byte("first"))
-	if err != nil || string(val) != "value1" {
-		t.Fatalf("Expected first key to survive: %v", err)
+	// A. All acknowledged data must survive
+	valFirst, err := reopened.Get([]byte("first"))
+	if err != nil || string(valFirst) != "value1" {
+		t.Fatalf("Acknowledged key 'first' missing or corrupted: got %q, err: %v", valFirst, err)
 	}
-	if info.RecoveredTransactions != 1 {
-		t.Fatalf("Expected 1 recovered transaction, got %d", info.RecoveredTransactions)
+	valSecond, err := reopened.Get([]byte("second_ack"))
+	if err != nil || string(valSecond) != "value2" {
+		t.Fatalf("Acknowledged key 'second_ack' missing or corrupted: got %q, err: %v", valSecond, err)
+	}
+
+	// B. Unacknowledged record must NOT be present
+	_, err = reopened.Get([]byte("unack_in_flight_key"))
+	if !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Expected ErrNotFound for unacknowledged key, got: %v", err)
+	}
+
+	// C. No partial or invented values exist
+	if info.LiveKeyCount != 2 {
+		t.Fatalf("Expected exactly 2 live keys, got: %d", info.LiveKeyCount)
+	}
+	if info.RecoveredTransactions != 2 {
+		t.Fatalf("Expected exactly 2 recovered transactions, got: %d", info.RecoveredTransactions)
+	}
+
+	// D. Discarded tail bytes must match the truncated unacknowledged transaction
+	expectedDiscardBytes := uint64(totalWithTailSize - 1 - ackSize)
+	if info.RepairedTailBytes != expectedDiscardBytes {
+		t.Fatalf("RepairedTailBytes mismatch: got %d, want %d", info.RepairedTailBytes, expectedDiscardBytes)
+	}
+
+	// E. Database remains healthy and accepts subsequent writes
+	if err := reopened.Put([]byte("subsequent_key"), []byte("subsequent_val")); err != nil {
+		t.Fatalf("Subsequent put failed: %v", err)
+	}
+	valSub, err := reopened.Get([]byte("subsequent_key"))
+	if err != nil || string(valSub) != "subsequent_val" {
+		t.Fatalf("Subsequent key missing: %v", err)
 	}
 }
 

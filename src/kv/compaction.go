@@ -3,12 +3,32 @@ package kv
 import (
 	"fmt"
 	"hash/crc32"
+	"math"
 	"os"
 )
 
-// DefaultCompactionBatchOps is the maximum number of operations bundled into a single
-// transaction during compaction. Keeping this bounded prevents massive memory consumption.
-const DefaultCompactionBatchOps = 1000
+// Default limits for compaction transaction chunking.
+const (
+	// DefaultCompactionBatchOps is the maximum number of operations bundled into a single
+	// compaction transaction.
+	DefaultCompactionBatchOps = 1000
+
+	// DefaultCompactionBatchBytes is the maximum encoded payload byte size bundled into
+	// a single compaction transaction (16 MiB). This guarantees bounded RAM usage even with
+	// multiple large values, preventing 32-bit OOM errors.
+	DefaultCompactionBatchBytes uint64 = 16 * 1024 * 1024
+)
+
+// CompactionHookFunc defines a callback invoked during specific phases of compaction.
+type CompactionHookFunc func(stage string) error
+
+// Active compaction batch thresholds and test hooks (overridable in tests).
+var (
+	compactionBatchOps   = DefaultCompactionBatchOps
+	compactionBatchBytes = DefaultCompactionBatchBytes
+	compactionHook       CompactionHookFunc
+	compactionRenameFn   = os.Rename
+)
 
 // compactLocked executes crash-safe compaction with db.mu held.
 // It iterates all live entries in the index, writes them to a temporary file (path + ".compact.tmp"),
@@ -50,120 +70,154 @@ func (db *DB) compactLocked() error {
 	// 3. Snapshot live keys from the current index in deterministic sorted order
 	liveKeys := db.index.Keys()
 
-	// If there are live keys, stream them into the new file in bounded transactions
-	if len(liveKeys) > 0 {
-		for i := 0; i < len(liveKeys); i += DefaultCompactionBatchOps {
-			end := i + DefaultCompactionBatchOps
-			if end > len(liveKeys) {
-				end = len(liveKeys)
-			}
-			batchKeys := liveKeys[i:end]
-
-			// Read live values from the current file and construct Ops
-			ops := make([]Op, len(batchKeys))
-			for j, k := range batchKeys {
-				entry, found := db.index.Get(k)
-				if !found {
-					continue
-				}
-				var val []byte
-				if entry.ValueLength > 0 {
-					val = make([]byte, entry.ValueLength)
-					if err := ReadAtFull(db.file, val, entry.ValueOffset); err != nil {
-						return fmt.Errorf("compaction: failed to read live value for key %q at offset %d: %w", k, entry.ValueOffset, err)
-					}
-				}
-				ops[j] = Op{
-					Kind:  PutOp,
-					Key:   k,
-					Value: val,
-				}
-			}
-
-			// Calculate sizes with checked arithmetic
-			payloadLen, err := CalculatePayloadSize(ops)
-			if err != nil {
-				return fmt.Errorf("compaction: payload size calculation failed: %w", err)
-			}
-			totalTxBytes, err := CalculateTotalTxnSize(ops)
-			if err != nil {
-				return fmt.Errorf("compaction: total transaction size calculation failed: %w", err)
-			}
-
-			// Preflight capacity check for the replacement file (Scenario E4)
-			if err := CheckCapacity(newCommittedEnd, totalTxBytes, db.maxFileBytes); err != nil {
-				return fmt.Errorf("compaction: %w", err)
-			}
-
-			// Build transaction header
-			txnHeader := TxnHeader{
-				Magic:      TxnHeaderMagic,
-				Version:    CurrentTxnVersion,
-				Flags:      0,
-				TxID:       nextTxID,
-				OpCount:    uint32(len(ops)),
-				Reserved:   0,
-				PayloadLen: payloadLen,
-			}
-			headerBytes := EncodeTxnHeader(txnHeader)
-
-			crcHasher := crc32.NewIEEE()
-			crcHasher.Write(headerBytes)
-
-			encodedOps := make([][]byte, len(ops))
-			curPayloadRel := int64(TxnHeaderSize)
-			batchUpdates := make([]PendingIndexUpdate, len(ops))
-
-			for j, op := range ops {
-				encOp, opErr := EncodeOp(op)
-				if opErr != nil {
-					return fmt.Errorf("compaction: encode op %d failed: %w", j, opErr)
-				}
-				encodedOps[j] = encOp
-				crcHasher.Write(encOp)
-
-				valOffset := newCommittedEnd + curPayloadRel + int64(OpHeaderSize) + int64(len(op.Key))
-				batchUpdates[j] = PendingIndexUpdate{
-					Key: op.Key,
-					Entry: IndexEntry{
-						ValueOffset: valOffset,
-						ValueLength: uint32(len(op.Value)),
-					},
-					IsDelete: false,
-				}
-				curPayloadRel += int64(len(encOp))
-			}
-
-			txnCRC := crcHasher.Sum32()
-			footer := NewCommitFooter(nextTxID, totalTxBytes, txnCRC)
-			footerBytes := EncodeCommitFooter(footer)
-
-			// Write Header to tmpFile
-			if err := WriteAtFull(tmpFile, headerBytes, newCommittedEnd); err != nil {
-				return fmt.Errorf("compaction: failed to write txn header: %w", err)
-			}
-
-			// Write Operations to tmpFile
-			writeOffset := newCommittedEnd + int64(TxnHeaderSize)
-			for _, encOp := range encodedOps {
-				if err := WriteAtFull(tmpFile, encOp, writeOffset); err != nil {
-					return fmt.Errorf("compaction: failed to write op payload: %w", err)
-				}
-				writeOffset += int64(len(encOp))
-			}
-
-			// Write Footer to tmpFile
-			footerOffset := newCommittedEnd + int64(TxnHeaderSize) + int64(payloadLen)
-			if err := WriteAtFull(tmpFile, footerBytes, footerOffset); err != nil {
-				return fmt.Errorf("compaction: failed to write txn footer: %w", err)
-			}
-
-			// Record updates into replacement index
-			newIndex.ApplyUpdates(batchUpdates)
-
-			newCommittedEnd += int64(totalTxBytes)
-			nextTxID++
+	if compactionHook != nil {
+		if err := compactionHook("writing_tmp"); err != nil {
+			return err
 		}
+	}
+
+	// If there are live keys, stream them into the new file in bounded transactions
+	// constrained by both operation count and cumulative payload byte size.
+	keyIdx := 0
+	for keyIdx < len(liveKeys) {
+		var batchOps []Op
+		var batchPayloadBytes uint64
+
+		for keyIdx < len(liveKeys) {
+			k := liveKeys[keyIdx]
+			entry, found := db.index.Get(k)
+			if !found {
+				keyIdx++
+				continue
+			}
+
+			// Checked calculation of op size: 7-byte header + key len + val len
+			kLen := uint64(len(k))
+			vLen := uint64(entry.ValueLength)
+			opBytes := uint64(OpHeaderSize) + kLen + vLen
+
+			// Check whether an individual operation is too large to fit in any compaction batch
+			if opBytes > compactionBatchBytes {
+				return fmt.Errorf("compaction: operation for key %q (encoded size %d bytes) exceeds compaction batch limit of %d bytes: %w", k, opBytes, compactionBatchBytes, ErrInvalid)
+			}
+
+			// If the batch already has at least one operation, check whether adding this
+			// operation would exceed either the op-count limit or the byte-size limit.
+			// Checking BEFORE reading/allocating ensures large values are bounded.
+			if len(batchOps) > 0 {
+				if len(batchOps) >= compactionBatchOps {
+					break
+				}
+				if math.MaxUint64-batchPayloadBytes < opBytes || batchPayloadBytes+opBytes > compactionBatchBytes {
+					break
+				}
+			}
+
+			// Read live value from the authoritative file
+			var val []byte
+			if entry.ValueLength > 0 {
+				val = make([]byte, entry.ValueLength)
+				if err := ReadAtFull(db.file, val, entry.ValueOffset); err != nil {
+					return fmt.Errorf("compaction: failed to read live value for key %q at offset %d: %w", k, entry.ValueOffset, err)
+				}
+			}
+
+			batchOps = append(batchOps, Op{
+				Kind:  PutOp,
+				Key:   k,
+				Value: val,
+			})
+			batchPayloadBytes += opBytes
+			keyIdx++
+		}
+
+		if len(batchOps) == 0 {
+			continue
+		}
+
+		// Calculate sizes with checked arithmetic
+		payloadLen, err := CalculatePayloadSize(batchOps)
+		if err != nil {
+			return fmt.Errorf("compaction: payload size calculation failed: %w", err)
+		}
+		totalTxBytes, err := CalculateTotalTxnSize(batchOps)
+		if err != nil {
+			return fmt.Errorf("compaction: total transaction size calculation failed: %w", err)
+		}
+
+		// Preflight capacity check for the replacement file (Scenario E4)
+		if err := CheckCapacity(newCommittedEnd, totalTxBytes, db.maxFileBytes); err != nil {
+			return fmt.Errorf("compaction: %w", err)
+		}
+
+		// Build transaction header
+		txnHeader := TxnHeader{
+			Magic:      TxnHeaderMagic,
+			Version:    CurrentTxnVersion,
+			Flags:      0,
+			TxID:       nextTxID,
+			OpCount:    uint32(len(batchOps)),
+			Reserved:   0,
+			PayloadLen: payloadLen,
+		}
+		headerBytes := EncodeTxnHeader(txnHeader)
+
+		crcHasher := crc32.NewIEEE()
+		crcHasher.Write(headerBytes)
+
+		encodedOps := make([][]byte, len(batchOps))
+		curPayloadRel := int64(TxnHeaderSize)
+		batchUpdates := make([]PendingIndexUpdate, len(batchOps))
+
+		for j, op := range batchOps {
+			encOp, opErr := EncodeOp(op)
+			if opErr != nil {
+				return fmt.Errorf("compaction: encode op %d failed: %w", j, opErr)
+			}
+			encodedOps[j] = encOp
+			crcHasher.Write(encOp)
+
+			valOffset := newCommittedEnd + curPayloadRel + int64(OpHeaderSize) + int64(len(op.Key))
+			batchUpdates[j] = PendingIndexUpdate{
+				Key: op.Key,
+				Entry: IndexEntry{
+					ValueOffset: valOffset,
+					ValueLength: uint32(len(op.Value)),
+				},
+				IsDelete: false,
+			}
+			curPayloadRel += int64(len(encOp))
+		}
+
+		txnCRC := crcHasher.Sum32()
+		footer := NewCommitFooter(nextTxID, totalTxBytes, txnCRC)
+		footerBytes := EncodeCommitFooter(footer)
+
+		// Write Header to tmpFile
+		if err := WriteAtFull(tmpFile, headerBytes, newCommittedEnd); err != nil {
+			return fmt.Errorf("compaction: failed to write txn header: %w", err)
+		}
+
+		// Write Operations to tmpFile
+		writeOffset := newCommittedEnd + int64(TxnHeaderSize)
+		for _, encOp := range encodedOps {
+			if err := WriteAtFull(tmpFile, encOp, writeOffset); err != nil {
+				return fmt.Errorf("compaction: failed to write op payload: %w", err)
+			}
+			writeOffset += int64(len(encOp))
+		}
+
+		// Write Footer to tmpFile
+		footerOffset := newCommittedEnd + int64(TxnHeaderSize) + int64(payloadLen)
+		if err := WriteAtFull(tmpFile, footerBytes, footerOffset); err != nil {
+			return fmt.Errorf("compaction: failed to write txn footer: %w", err)
+		}
+
+		// Record updates into replacement index
+		newIndex.ApplyUpdates(batchUpdates)
+
+		newCommittedEnd += int64(totalTxBytes)
+		nextTxID++
 	}
 
 	// 4. Ensure complete physical durability of the replacement file before swapping
@@ -183,8 +237,21 @@ func (db *DB) compactLocked() error {
 		return fmt.Errorf("compaction: failed to close authoritative file before swap: %w", err)
 	}
 
+	if compactionHook != nil {
+		if err := compactionHook("after_sync"); err != nil {
+			reopenFile, reopenErr := os.OpenFile(db.path, os.O_RDWR, 0644)
+			if reopenErr == nil {
+				db.file = reopenFile
+			} else {
+				db.poisoned = fmt.Errorf("compaction failed to restore file: %w", reopenErr)
+			}
+			_ = os.Remove(tmpPath)
+			return err
+		}
+	}
+
 	// Atomic rename: replacement file becomes the authoritative database
-	if err := os.Rename(tmpPath, db.path); err != nil {
+	if err := compactionRenameFn(tmpPath, db.path); err != nil {
 		// If rename fails, attempt reopening the old file
 		reopenFile, reopenErr := os.OpenFile(db.path, os.O_RDWR, 0644)
 		if reopenErr == nil {
@@ -194,6 +261,12 @@ func (db *DB) compactLocked() error {
 		}
 		_ = os.Remove(tmpPath)
 		return fmt.Errorf("compaction: atomic rename failed: %w", err)
+	}
+
+	if compactionHook != nil {
+		if err := compactionHook("after_rename"); err != nil {
+			return err
+		}
 	}
 
 	// 6. Reopen the newly installed authoritative file
