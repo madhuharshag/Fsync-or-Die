@@ -2,6 +2,7 @@ package kv
 
 import (
 	"bytes"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"os"
@@ -609,5 +610,44 @@ func TestDB_CheckIntegrity(t *testing.T) {
 	}
 	if !errors.Is(err, ErrCorrupt) {
 		t.Fatalf("expected ErrCorrupt for short file, got %v", err)
+	}
+
+	// 5. Test OpCount mismatch detection
+	opCountMismatchPath := filepath.Join(dir, "opcount_mismatch.db")
+	dbValid, _, err := Open(opCountMismatchPath, Options{})
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	if err := dbValid.Put([]byte("test_k"), []byte("test_v")); err != nil {
+		t.Fatalf("Put failed: %v", err)
+	}
+	dbValid.Close()
+
+	// Tamper with OpCount at byte offset 32 + 16 (TxnHeader OpCount field)
+	fOp, err := os.OpenFile(opCountMismatchPath, os.O_RDWR, 0644)
+	if err != nil {
+		t.Fatalf("open raw failed: %v", err)
+	}
+	// Change OpCount from 1 to 2
+	var opCountBytes [4]byte
+	binary.LittleEndian.PutUint32(opCountBytes[:], 2)
+	_, _ = fOp.WriteAt(opCountBytes[:], 32+16)
+	_ = fOp.Sync()
+	_ = fOp.Close()
+
+	dbTampered, _, err := Open(opCountMismatchPath, Options{ReadOnly: true})
+	if err != nil {
+		if !errors.Is(err, ErrCorrupt) {
+			t.Fatalf("expected ErrCorrupt on Open with tampered OpCount, got %v", err)
+		}
+	} else {
+		defer dbTampered.Close()
+		chkErr := dbTampered.Check()
+		if chkErr == nil {
+			t.Fatalf("expected Check to detect OpCount mismatch, got nil")
+		}
+		if !errors.Is(chkErr, ErrCorrupt) {
+			t.Fatalf("expected ErrCorrupt for OpCount mismatch, got %v", chkErr)
+		}
 	}
 }

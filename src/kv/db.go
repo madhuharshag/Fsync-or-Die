@@ -250,24 +250,31 @@ func (db *DB) Check() error {
 			return fmt.Errorf("check: decode txn header at %d: %w", offset, err)
 		}
 
-		totalTxBytes := int64(TxnHeaderSize) + int64(txnHeader.PayloadLen) + int64(CommitFooterSize)
-		if offset+totalTxBytes > db.committedEnd {
-			return fmt.Errorf("%w: check: transaction at %d exceeds committed end %d", ErrCorrupt, offset, db.committedEnd)
+		remaining := uint64(db.committedEnd - offset)
+		overhead := uint64(TxnHeaderSize + CommitFooterSize)
+		if remaining < overhead || txnHeader.PayloadLen > remaining-overhead {
+			return fmt.Errorf("%w: check: transaction at %d exceeds committed end %d (payload %d bytes)", ErrCorrupt, offset, db.committedEnd, txnHeader.PayloadLen)
 		}
 
+		totalTxBytes := int64(overhead + txnHeader.PayloadLen)
 		payloadBuf := make([]byte, txnHeader.PayloadLen)
 		if err := ReadAtFull(db.file, payloadBuf, offset+int64(TxnHeaderSize)); err != nil {
 			return fmt.Errorf("check: read payload at %d: %w", offset, err)
 		}
 
 		// Verify individual operations in payload
+		opCount := uint32(0)
 		cur := 0
 		for cur < len(payloadBuf) {
 			_, consumed, opErr := DecodeOp(payloadBuf[cur:])
 			if opErr != nil {
 				return fmt.Errorf("check: decode op in txn %d at offset %d: %w", txnHeader.TxID, offset+int64(TxnHeaderSize)+int64(cur), opErr)
 			}
+			opCount++
 			cur += consumed
+		}
+		if opCount != txnHeader.OpCount {
+			return fmt.Errorf("%w: check: txn %d decoded op count %d mismatch declared %d", ErrCorrupt, txnHeader.TxID, opCount, txnHeader.OpCount)
 		}
 
 		footerBuf := make([]byte, CommitFooterSize)
@@ -387,11 +394,13 @@ func (db *DB) recoverAndRepairLocked() (OpenInfo, error) {
 			break
 		}
 
-		totalTxBytes := int64(TxnHeaderSize) + int64(txnHeader.PayloadLen) + int64(CommitFooterSize)
-		if offset+totalTxBytes > fileSize {
+		remaining := uint64(fileSize - offset)
+		overhead := uint64(TxnHeaderSize + CommitFooterSize)
+		if remaining < overhead || txnHeader.PayloadLen > remaining-overhead {
 			// Incomplete transaction payload/footer
 			break
 		}
+		totalTxBytes := int64(overhead + txnHeader.PayloadLen)
 
 		// Read payload
 		payloadBuf := make([]byte, txnHeader.PayloadLen)
@@ -456,7 +465,7 @@ func (db *DB) recoverAndRepairLocked() (OpenInfo, error) {
 			}
 			cur += consumed
 		}
-		if !validOps {
+		if !validOps || uint32(len(updates)) != txnHeader.OpCount {
 			break
 		}
 
