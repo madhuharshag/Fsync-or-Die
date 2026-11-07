@@ -1,0 +1,15 @@
+# Binaries
+*.exe
+*.test
+/kip
+
+# Temporary Database & Lock Files
+*.kip
+*.kip.lock
+*.compact.tmp
+*.db
+*.log
+
+# OS & Editor
+.DS_Store
+Thumbs.db
