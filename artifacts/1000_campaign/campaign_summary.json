@@ -1,0 +1,124 @@
+{
+  "total_cases": 1000,
+  "passed_cases": 1000,
+  "failed_cases": 0,
+  "pass_rate": "100.00%",
+  "total_duration": "20.0179762s",
+  "category_breakdown": {
+    "A: Input \u0026 Contract Boundaries": {
+      "total": 100,
+      "passed": 100,
+      "failed": 0,
+      "duration": ""
+    },
+    "B: Transaction Ordering \u0026 Atomic Publication": {
+      "total": 100,
+      "passed": 100,
+      "failed": 0,
+      "duration": ""
+    },
+    "C: Torn Data \u0026 Repair": {
+      "total": 120,
+      "passed": 120,
+      "failed": 0,
+      "duration": ""
+    },
+    "D: Interrupted \u0026 Repeated Recovery": {
+      "total": 80,
+      "passed": 80,
+      "failed": 0,
+      "duration": ""
+    },
+    "E: Compaction Correctness \u0026 Interruption": {
+      "total": 120,
+      "passed": 120,
+      "failed": 0,
+      "duration": ""
+    },
+    "F: Capacity Limits \u0026 I/O Failures": {
+      "total": 100,
+      "passed": 100,
+      "failed": 0,
+      "duration": ""
+    },
+    "G: Concurrency, Lifecycle \u0026 Process Locking": {
+      "total": 100,
+      "passed": 100,
+      "failed": 0,
+      "duration": ""
+    },
+    "H: Maximum Values \u0026 Maximum Batches": {
+      "total": 80,
+      "passed": 80,
+      "failed": 0,
+      "duration": ""
+    },
+    "I: Random-Time Process-Kill Workloads": {
+      "total": 150,
+      "passed": 150,
+      "failed": 0,
+      "duration": ""
+    },
+    "J: Oracle Negative Controls": {
+      "total": 50,
+      "passed": 50,
+      "failed": 0,
+      "duration": ""
+    }
+  },
+  "performance_metrics": {
+    "recovery_1m_keys_cold_ms": 461.536,
+    "recovery_1m_keys_crash_ms": 484.61280000000005,
+    "put_latency": {
+      "p50_micros": 0,
+      "p95_micros": 611,
+      "p99_micros": 1008,
+      "max_micros": 2119
+    },
+    "get_latency": {
+      "p50_micros": 0,
+      "p95_micros": 0,
+      "p99_micros": 0,
+      "max_micros": 649
+    },
+    "delete_latency": {
+      "p50_micros": 0,
+      "p95_micros": 0,
+      "p99_micros": 0,
+      "max_micros": 649
+    },
+    "batch_10_latency": {
+      "p50_micros": 510,
+      "p95_micros": 546,
+      "p99_micros": 632,
+      "max_micros": 632
+    },
+    "batch_100_latency": {
+      "p50_micros": 4335,
+      "p95_micros": 4335,
+      "p99_micros": 4335,
+      "max_micros": 4335
+    },
+    "batch_1000_latency": {
+      "p50_micros": 38250,
+      "p95_micros": 38250,
+      "p99_micros": 38250,
+      "max_micros": 38250
+    },
+    "compaction_bench": {
+      "pre_size_bytes": 575332,
+      "post_size_bytes": 72624,
+      "space_reclaimed_percent": "87.38%",
+      "duration_ms": 41.72,
+      "keys_live": 500,
+      "keys_discarded": 4500
+    }
+  },
+  "environment": {
+    "arch": "386",
+    "go_version": "go1.27.3",
+    "host_cpus": "24",
+    "os": "windows"
+  },
+  "timestamp": "2026-11-06T20:15:45.3069356+05:30"
+}
