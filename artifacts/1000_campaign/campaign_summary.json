@@ -3,7 +3,7 @@
   "passed_cases": 1000,
   "failed_cases": 0,
   "pass_rate": "100.00%",
-  "total_duration": "20.0179762s",
+  "total_duration": "30.1830869s",
   "category_breakdown": {
     "A: Input \u0026 Contract Boundaries": {
       "total": 100,
@@ -70,46 +70,46 @@
     "recovery_1m_keys_cold_ms": 461.536,
     "recovery_1m_keys_crash_ms": 484.61280000000005,
     "put_latency": {
-      "p50_micros": 0,
-      "p95_micros": 611,
-      "p99_micros": 1008,
-      "max_micros": 2119
+      "p50_micros": 800,
+      "p95_micros": 1571,
+      "p99_micros": 2254,
+      "max_micros": 6427
     },
     "get_latency": {
       "p50_micros": 0,
       "p95_micros": 0,
       "p99_micros": 0,
-      "max_micros": 649
+      "max_micros": 1455
     },
     "delete_latency": {
       "p50_micros": 0,
       "p95_micros": 0,
       "p99_micros": 0,
-      "max_micros": 649
+      "max_micros": 1455
     },
     "batch_10_latency": {
-      "p50_micros": 510,
-      "p95_micros": 546,
-      "p99_micros": 632,
-      "max_micros": 632
+      "p50_micros": 843,
+      "p95_micros": 1718,
+      "p99_micros": 2559,
+      "max_micros": 2559
     },
     "batch_100_latency": {
-      "p50_micros": 4335,
-      "p95_micros": 4335,
-      "p99_micros": 4335,
-      "max_micros": 4335
+      "p50_micros": 7165.5,
+      "p95_micros": 7165.5,
+      "p99_micros": 7165.5,
+      "max_micros": 7165.5
     },
     "batch_1000_latency": {
-      "p50_micros": 38250,
-      "p95_micros": 38250,
-      "p99_micros": 38250,
-      "max_micros": 38250
+      "p50_micros": 63225,
+      "p95_micros": 63225,
+      "p99_micros": 63225,
+      "max_micros": 63225
     },
     "compaction_bench": {
       "pre_size_bytes": 575332,
       "post_size_bytes": 72624,
       "space_reclaimed_percent": "87.38%",
-      "duration_ms": 41.72,
+      "duration_ms": 27.911,
       "keys_live": 500,
       "keys_discarded": 4500
     }
@@ -120,5 +120,5 @@
     "host_cpus": "24",
     "os": "windows"
   },
-  "timestamp": "2026-11-06T20:15:45.3069356+05:30"
+  "timestamp": "2026-11-07T06:48:52.0594421+05:30"
 }
