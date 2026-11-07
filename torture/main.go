@@ -61,9 +61,20 @@ func main() {
 			fmt.Fprintf(os.Stderr, "failed to create temp dir: %v\n", err)
 			os.Exit(1)
 		}
-		defer os.RemoveAll(tempDir)
 		dbPath = filepath.Join(tempDir, "torture.db")
 	}
+
+	var runPassed bool
+	defer func() {
+		if tempDir != "" {
+			if runPassed {
+				_ = os.RemoveAll(tempDir)
+			} else {
+				absPath, _ := filepath.Abs(tempDir)
+				fmt.Fprintf(os.Stderr, "\n[PRESERVED] Failing workspace preserved for debugging at: %s\n", absPath)
+			}
+		}
+	}()
 
 	journalPath := *journalFlag
 	if journalPath == "" && tempDir != "" {
@@ -111,6 +122,10 @@ func main() {
 			printReport(report)
 		}
 		os.Exit(1)
+	}
+
+	if report != nil && report.Passed {
+		runPassed = true
 	}
 
 	fmt.Println("\n[PASS] TORTURE TEST COMPLETED SUCCESSFULLY")

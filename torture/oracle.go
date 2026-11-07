@@ -168,27 +168,107 @@ func (o *Oracle) Verify(dbPath string) error {
 	// 3. Resolve any indeterminate atomic batches first (All-or-Nothing rule)
 	for _, ind := range o.indeterminateOps {
 		if ind.Kind == OpBatch && len(ind.BatchOps) > 0 {
-			appliedCount := 0
+			// Determine effective post-batch state for each distinct key modified in this batch
+			// (handling duplicate keys within the batch sequentially: last write wins)
+			effectiveBatchOps := make(map[string]OpRecord)
 			for _, bOp := range ind.BatchOps {
-				val, err := db.Get([]byte(bOp.Key))
-				if bOp.Kind == OpPut {
-					if err == nil && bytes.Equal(val, bOp.Value) {
-						appliedCount++
+				effectiveBatchOps[bOp.Key] = bOp
+			}
+
+			// Identify informative keys where the batch would change the pre-batch state
+			type keyDelta struct {
+				postOp    OpRecord
+				hadPreVal bool
+				preVal    []byte
+			}
+			deltas := make(map[string]keyDelta)
+
+			for k, postOp := range effectiveBatchOps {
+				preVal, hadPreVal := o.ackedKeys[k]
+				preDeleted := o.ackedDeletes[k]
+
+				isNoop := false
+				if postOp.Kind == OpPut {
+					if hadPreVal && bytes.Equal(preVal, postOp.Value) {
+						isNoop = true // Pre-existing value matches new value
 					}
-				} else if bOp.Kind == OpDelete {
-					if errors.Is(err, kv.ErrNotFound) {
-						appliedCount++
+				} else if postOp.Kind == OpDelete {
+					if !hadPreVal && preDeleted {
+						isNoop = true // Already deleted or absent
+					}
+				}
+
+				if !isNoop {
+					deltas[k] = keyDelta{
+						postOp:    postOp,
+						hadPreVal: hadPreVal,
+						preVal:    preVal,
 					}
 				}
 			}
-			// Invariant: batch must either be 100% applied or 0% applied.
-			// Any partial count is a violation of atomicity!
-			if appliedCount > 0 && appliedCount < len(ind.BatchOps) {
-				return fmt.Errorf("oracle verify: atomic batch %d violated: %d of %d ops applied (partial batch exposed!)",
-					ind.BatchID, appliedCount, len(ind.BatchOps))
+
+			// If no keys would change state, adopt the batch's sequential state updates
+			if len(deltas) == 0 {
+				for _, bOp := range ind.BatchOps {
+					if bOp.Kind == OpPut {
+						valCopy := make([]byte, len(bOp.Value))
+						copy(valCopy, bOp.Value)
+						o.ackedKeys[bOp.Key] = valCopy
+						delete(o.ackedDeletes, bOp.Key)
+					} else if bOp.Kind == OpDelete {
+						delete(o.ackedKeys, bOp.Key)
+						o.ackedDeletes[bOp.Key] = true
+					}
+				}
+				continue
 			}
-			if appliedCount == len(ind.BatchOps) {
-				// The in-flight batch committed before process death. Adopt its state.
+
+			// Check disk state for all delta keys
+			matchedPost := 0
+			matchedPre := 0
+
+			for k, delta := range deltas {
+				actualVal, err := db.Get([]byte(k))
+				postMatches := false
+				if delta.postOp.Kind == OpPut {
+					if err == nil && bytes.Equal(actualVal, delta.postOp.Value) {
+						postMatches = true
+					}
+				} else if delta.postOp.Kind == OpDelete {
+					if errors.Is(err, kv.ErrNotFound) {
+						postMatches = true
+					}
+				}
+
+				preMatches := false
+				if delta.hadPreVal {
+					if err == nil && bytes.Equal(actualVal, delta.preVal) {
+						preMatches = true
+					}
+				} else {
+					if errors.Is(err, kv.ErrNotFound) {
+						preMatches = true
+					}
+				}
+
+				if postMatches {
+					matchedPost++
+				} else if preMatches {
+					matchedPre++
+				} else {
+					return fmt.Errorf("oracle verify: atomic batch %d key %q has unexpected value (len %d, err %v)",
+						ind.BatchID, k, len(actualVal), err)
+				}
+			}
+
+			// Invariant verification: All-or-Nothing
+			if matchedPost > 0 && matchedPost < len(deltas) {
+				return fmt.Errorf("oracle verify: atomic batch %d violated: %d of %d changing ops applied (partial batch exposed!)",
+					ind.BatchID, matchedPost, len(deltas))
+			}
+
+			if matchedPost == len(deltas) {
+				// The in-flight batch committed before process death. Adopt its state in sequential order.
 				for _, bOp := range ind.BatchOps {
 					if bOp.Kind == OpPut {
 						valCopy := make([]byte, len(bOp.Value))
@@ -201,6 +281,7 @@ func (o *Oracle) Verify(dbPath string) error {
 					}
 				}
 			}
+			// If matchedPre == len(deltas), the batch committed 0%; do nothing, pre-state remains intact!
 		}
 	}
 

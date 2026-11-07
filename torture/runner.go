@@ -9,8 +9,10 @@ import (
 	"math/rand"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -19,6 +21,7 @@ import (
 
 // SubprocessWorker manages communication with an active database child process.
 type SubprocessWorker struct {
+	mu      sync.Mutex
 	cmd     *exec.Cmd
 	stdin   io.WriteCloser
 	scanner *bufio.Scanner
@@ -102,8 +105,36 @@ func (w *SubprocessWorker) ReadResponse() (string, error) {
 	return "", io.EOF
 }
 
+// Exec atomically writes a command and reads the response line, thread-safe for concurrent callers.
+func (w *SubprocessWorker) Exec(cmd string) (string, error) {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+
+	if err := w.SendCommand(cmd); err != nil {
+		return "", err
+	}
+	return w.ReadResponse()
+}
+
+// ExecWithInFlightKill writes a command under lock, releases the lock, and executes the kill callback mid-flight.
+func (w *SubprocessWorker) ExecWithInFlightKill(cmd string, killFn func()) error {
+	w.mu.Lock()
+	err := w.SendCommand(cmd)
+	w.mu.Unlock()
+
+	if err != nil {
+		return err
+	}
+	if killFn != nil {
+		killFn()
+	}
+	return nil
+}
+
 // Kill forces immediate non-graceful process termination (TerminateProcess / SIGKILL).
 func (w *SubprocessWorker) Kill() error {
+	w.mu.Lock()
+	defer w.mu.Unlock()
 	if w.cmd != nil && w.cmd.Process != nil {
 		_ = w.cmd.Process.Kill()
 		_ = w.cmd.Wait()
@@ -158,11 +189,13 @@ func (r *HarnessRunner) Run() (*HarnessReport, error) {
 	}
 
 	report := &HarnessReport{
-		Mode:       mode,
-		Seed:       r.config.Seed,
-		GoVersion:  runtime.Version(),
-		OSArch:     fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH),
-		BinaryPath: exe,
+		Mode:         mode,
+		Seed:         r.config.Seed,
+		GoVersion:    runtime.Version(),
+		OSArch:       fmt.Sprintf("%s/%s", runtime.GOOS, runtime.GOARCH),
+		BinaryPath:   exe,
+		DbPath:       r.config.DbPath,
+		WorkspaceDir: filepath.Dir(r.config.DbPath),
 	}
 
 	switch mode {
@@ -205,209 +238,63 @@ func (r *HarnessRunner) runStandardCrashMode(report *HarnessReport, startTime ti
 			killAtOpIndex = 0
 		}
 
-		for i := 0; i < opsPerBurst; i++ {
-			opSeq++
-			opID := atomic.AddUint64(&r.opsAttempted, 1)
-			writerID := r.rng.Intn(r.config.Writers)
-			if writerID < 0 {
-				writerID = 0
-			}
+		numWriters := r.config.Writers
+		if numWriters <= 1 {
+			// Single writer sequential loop
+			for i := 0; i < opsPerBurst; i++ {
+				opID := atomic.AddUint64(&r.opsAttempted, 1)
+				currentSeq := atomic.AddUint64(&opSeq, 1)
+				isInFlightKillOp := (inFlightKillCycle && i == killAtOpIndex)
 
-			isInFlightKillOp := (inFlightKillCycle && i == killAtOpIndex)
-
-			// Determine operation kind based on mode
-			isBatch := false
-			isLargeVal := (mode == "large_values")
-
-			if mode == "large_batches" {
-				isBatch = true
-			} else if mode == "random" {
-				dice := r.rng.Intn(100)
-				if dice >= 85 {
-					isBatch = true
-				}
-			}
-
-			if isBatch {
-				// EXECUTE ATOMIC BATCH
-				batchSize := 2 + r.rng.Intn(10)
-				if mode == "large_batches" {
-					batchSize = 20 + r.rng.Intn(80) // 20 to 100 ops per batch
-				}
-
-				type WireOp struct {
-					Kind  uint8  `json:"kind"`
-					Key   string `json:"key"`
-					Value string `json:"val"`
-				}
-				var wireOps []WireOp
-				var batchRecs []OpRecord
-
-				for b := 0; b < batchSize; b++ {
-					bk := fmt.Sprintf("w%d/batch_%06d_%d", writerID, r.rng.Intn(200), b)
-					bv := fmt.Sprintf("batch_val_%d_%d", opID, b)
-					wireOps = append(wireOps, WireOp{Kind: 1, Key: bk, Value: bv})
-					batchRecs = append(batchRecs, OpRecord{
-						Kind:     OpPut,
-						Key:      bk,
-						Value:    []byte(bv),
-						ValLen:   len(bv),
-						BatchID:  opID,
-						WriterID: writerID,
-					})
-				}
-
-				rawJson, _ := json.Marshal(wireOps)
-				encJson := base64.StdEncoding.EncodeToString(rawJson)
-
-				rec := OpRecord{
-					OpID:       opID,
-					Seed:       r.config.Seed,
-					Kind:       OpBatch,
-					BatchID:    opID,
-					BatchOps:   batchRecs,
-					Status:     StatusPending,
-					WriterID:   writerID,
-					SeqNum:     opSeq,
-					CrashCycle: cycle,
-					Timestamp:  time.Now(),
-				}
-
-				if err := worker.SendCommand(fmt.Sprintf("BATCH %d %s", opID, encJson)); err != nil {
-					r.oracle.RecordIndeterminate(rec)
-					atomic.AddUint64(&r.opsIndeterminate, 1)
-					break
-				}
-
-				if isInFlightKillOp {
-					// IN-FLIGHT KILL: kill worker mid-batch execution
+				killed := r.dispatchOp(worker, mode, cycle, 0, opID, currentSeq, isInFlightKillOp, r.rng, func() {
 					_ = worker.Kill()
-					r.oracle.RecordIndeterminate(rec)
-					atomic.AddUint64(&r.opsIndeterminate, 1)
+				})
+				if killed {
 					break
-				}
-
-				resp, err := worker.ReadResponse()
-				if err != nil {
-					r.oracle.RecordIndeterminate(rec)
-					atomic.AddUint64(&r.opsIndeterminate, 1)
-					break
-				}
-
-				if strings.HasPrefix(resp, "ACK") {
-					_ = r.oracle.RecordAck(rec)
-					atomic.AddUint64(&r.opsAcknowledged, 1)
-				} else {
-					r.oracle.RecordRejected(rec, resp)
-					atomic.AddUint64(&r.opsRejected, 1)
-				}
-
-			} else {
-				// EXECUTE PUT OR DELETE
-				dice := r.rng.Intn(100)
-				if dice < 85 || isLargeVal {
-					// PUT
-					k := fmt.Sprintf("w%d/key_%06d", writerID, r.rng.Intn(500))
-					vLen := 16 + r.rng.Intn(256)
-					if isLargeVal {
-						// 256 KB to 1 MB values
-						vLen = 256*1024 + r.rng.Intn(768*1024)
-					}
-					v := make([]byte, vLen)
-					r.rng.Read(v)
-
-					rec := OpRecord{
-						OpID:       opID,
-						Seed:       r.config.Seed,
-						Kind:       OpPut,
-						Key:        k,
-						Value:      v,
-						ValLen:     len(v),
-						Status:     StatusPending,
-						WriterID:   writerID,
-						SeqNum:     opSeq,
-						CrashCycle: cycle,
-						Timestamp:  time.Now(),
-					}
-
-					encK := base64.StdEncoding.EncodeToString([]byte(k))
-					encV := base64.StdEncoding.EncodeToString(v)
-					cmd := fmt.Sprintf("PUT %d %s %s", opID, encK, encV)
-
-					if err := worker.SendCommand(cmd); err != nil {
-						r.oracle.RecordIndeterminate(rec)
-						atomic.AddUint64(&r.opsIndeterminate, 1)
-						break
-					}
-
-					if isInFlightKillOp {
-						// IN-FLIGHT KILL: terminate worker while write is executing
-						_ = worker.Kill()
-						r.oracle.RecordIndeterminate(rec)
-						atomic.AddUint64(&r.opsIndeterminate, 1)
-						break
-					}
-
-					resp, err := worker.ReadResponse()
-					if err != nil {
-						r.oracle.RecordIndeterminate(rec)
-						atomic.AddUint64(&r.opsIndeterminate, 1)
-						break
-					}
-
-					if strings.HasPrefix(resp, "ACK") {
-						_ = r.oracle.RecordAck(rec)
-						atomic.AddUint64(&r.opsAcknowledged, 1)
-					} else {
-						r.oracle.RecordRejected(rec, resp)
-						atomic.AddUint64(&r.opsRejected, 1)
-					}
-
-				} else {
-					// DELETE
-					k := fmt.Sprintf("w%d/key_%06d", writerID, r.rng.Intn(500))
-					rec := OpRecord{
-						OpID:       opID,
-						Seed:       r.config.Seed,
-						Kind:       OpDelete,
-						Key:        k,
-						Status:     StatusPending,
-						WriterID:   writerID,
-						SeqNum:     opSeq,
-						CrashCycle: cycle,
-						Timestamp:  time.Now(),
-					}
-
-					encK := base64.StdEncoding.EncodeToString([]byte(k))
-					if err := worker.SendCommand(fmt.Sprintf("DEL %d %s", opID, encK)); err != nil {
-						r.oracle.RecordIndeterminate(rec)
-						atomic.AddUint64(&r.opsIndeterminate, 1)
-						break
-					}
-
-					if isInFlightKillOp {
-						_ = worker.Kill()
-						r.oracle.RecordIndeterminate(rec)
-						atomic.AddUint64(&r.opsIndeterminate, 1)
-						break
-					}
-
-					resp, err := worker.ReadResponse()
-					if err != nil {
-						r.oracle.RecordIndeterminate(rec)
-						atomic.AddUint64(&r.opsIndeterminate, 1)
-						break
-					}
-
-					if strings.HasPrefix(resp, "ACK") {
-						_ = r.oracle.RecordAck(rec)
-						atomic.AddUint64(&r.opsAcknowledged, 1)
-					} else {
-						r.oracle.RecordRejected(rec, resp)
-						atomic.AddUint64(&r.opsRejected, 1)
-					}
 				}
 			}
+		} else {
+			// Multi-goroutine concurrent writer pool
+			var wg sync.WaitGroup
+			var killedOnce sync.Once
+			killedCh := make(chan struct{})
+
+			taskCh := make(chan int, opsPerBurst)
+			for i := 0; i < opsPerBurst; i++ {
+				taskCh <- i
+			}
+			close(taskCh)
+
+			for w := 0; w < numWriters; w++ {
+				writerID := w
+				wg.Add(1)
+				go func(wid int) {
+					defer wg.Done()
+					localRng := rand.New(rand.NewSource(r.config.Seed + int64(cycle*1000+wid)))
+					for i := range taskCh {
+						select {
+						case <-killedCh:
+							return
+						default:
+						}
+
+						opID := atomic.AddUint64(&r.opsAttempted, 1)
+						currentSeq := atomic.AddUint64(&opSeq, 1)
+						isInFlightKillOp := (inFlightKillCycle && i == killAtOpIndex)
+
+						killed := r.dispatchOp(worker, mode, cycle, wid, opID, currentSeq, isInFlightKillOp, localRng, func() {
+							killedOnce.Do(func() {
+								close(killedCh)
+								_ = worker.Kill()
+							})
+						})
+						if killed {
+							return
+						}
+					}
+				}(writerID)
+			}
+			wg.Wait()
 		}
 
 		// FORCED CRASH
@@ -451,6 +338,195 @@ func (r *HarnessRunner) runStandardCrashMode(report *HarnessReport, startTime ti
 	report.VerificationMsg = fmt.Sprintf("Mode %s verified successfully. All acknowledged mutations survived. All-or-Nothing atomicity preserved.", mode)
 
 	return report, nil
+}
+
+// dispatchOp executes a single database operation against the worker, handling serialization,
+// execution via the synchronized worker pipe, and in-flight kill injection.
+func (r *HarnessRunner) dispatchOp(
+	worker *SubprocessWorker,
+	mode string,
+	cycle int,
+	writerID int,
+	opID uint64,
+	seq uint64,
+	isInFlightKill bool,
+	rng *rand.Rand,
+	killFn func(),
+) bool {
+	isBatch := false
+	isLargeVal := (mode == "large_values")
+
+	if mode == "large_batches" {
+		isBatch = true
+	} else if mode == "random" {
+		dice := rng.Intn(100)
+		if dice >= 85 {
+			isBatch = true
+		}
+	}
+
+	if isBatch {
+		batchSize := 2 + rng.Intn(10)
+		if mode == "large_batches" {
+			batchSize = 20 + rng.Intn(80)
+		}
+
+		type WireOp struct {
+			Kind  uint8  `json:"kind"`
+			Key   string `json:"key"`
+			Value string `json:"val"`
+		}
+		var wireOps []WireOp
+		var batchRecs []OpRecord
+
+		for b := 0; b < batchSize; b++ {
+			bk := fmt.Sprintf("w%d/batch_%06d_%d", writerID, rng.Intn(200), b)
+			bv := fmt.Sprintf("batch_val_%d_%d", opID, b)
+			wireOps = append(wireOps, WireOp{Kind: 1, Key: bk, Value: bv})
+			batchRecs = append(batchRecs, OpRecord{
+				Kind:     OpPut,
+				Key:      bk,
+				Value:    []byte(bv),
+				ValLen:   len(bv),
+				BatchID:  opID,
+				WriterID: writerID,
+			})
+		}
+
+		rawJson, _ := json.Marshal(wireOps)
+		encJson := base64.StdEncoding.EncodeToString(rawJson)
+
+		rec := OpRecord{
+			OpID:       opID,
+			Seed:       r.config.Seed,
+			Kind:       OpBatch,
+			BatchID:    opID,
+			BatchOps:   batchRecs,
+			Status:     StatusPending,
+			WriterID:   writerID,
+			SeqNum:     seq,
+			CrashCycle: cycle,
+			Timestamp:  time.Now(),
+		}
+
+		cmd := fmt.Sprintf("BATCH %d %s", opID, encJson)
+
+		if isInFlightKill {
+			_ = worker.ExecWithInFlightKill(cmd, killFn)
+			r.oracle.RecordIndeterminate(rec)
+			atomic.AddUint64(&r.opsIndeterminate, 1)
+			return true
+		}
+
+		resp, err := worker.Exec(cmd)
+		if err != nil {
+			r.oracle.RecordIndeterminate(rec)
+			atomic.AddUint64(&r.opsIndeterminate, 1)
+			return false
+		}
+
+		if strings.HasPrefix(resp, "ACK") {
+			_ = r.oracle.RecordAck(rec)
+			atomic.AddUint64(&r.opsAcknowledged, 1)
+		} else {
+			r.oracle.RecordRejected(rec, resp)
+			atomic.AddUint64(&r.opsRejected, 1)
+		}
+		return false
+
+	} else {
+		dice := rng.Intn(100)
+		if dice < 85 || isLargeVal {
+			k := fmt.Sprintf("w%d/key_%06d", writerID, rng.Intn(500))
+			vLen := 16 + rng.Intn(256)
+			if isLargeVal {
+				vLen = 256*1024 + rng.Intn(768*1024)
+			}
+			v := make([]byte, vLen)
+			rng.Read(v)
+
+			rec := OpRecord{
+				OpID:       opID,
+				Seed:       r.config.Seed,
+				Kind:       OpPut,
+				Key:        k,
+				Value:      v,
+				ValLen:     len(v),
+				Status:     StatusPending,
+				WriterID:   writerID,
+				SeqNum:     seq,
+				CrashCycle: cycle,
+				Timestamp:  time.Now(),
+			}
+
+			encK := base64.StdEncoding.EncodeToString([]byte(k))
+			encV := base64.StdEncoding.EncodeToString(v)
+			cmd := fmt.Sprintf("PUT %d %s %s", opID, encK, encV)
+
+			if isInFlightKill {
+				_ = worker.ExecWithInFlightKill(cmd, killFn)
+				r.oracle.RecordIndeterminate(rec)
+				atomic.AddUint64(&r.opsIndeterminate, 1)
+				return true
+			}
+
+			resp, err := worker.Exec(cmd)
+			if err != nil {
+				r.oracle.RecordIndeterminate(rec)
+				atomic.AddUint64(&r.opsIndeterminate, 1)
+				return false
+			}
+
+			if strings.HasPrefix(resp, "ACK") {
+				_ = r.oracle.RecordAck(rec)
+				atomic.AddUint64(&r.opsAcknowledged, 1)
+			} else {
+				r.oracle.RecordRejected(rec, resp)
+				atomic.AddUint64(&r.opsRejected, 1)
+			}
+			return false
+
+		} else {
+			k := fmt.Sprintf("w%d/key_%06d", writerID, rng.Intn(500))
+			rec := OpRecord{
+				OpID:       opID,
+				Seed:       r.config.Seed,
+				Kind:       OpDelete,
+				Key:        k,
+				Status:     StatusPending,
+				WriterID:   writerID,
+				SeqNum:     seq,
+				CrashCycle: cycle,
+				Timestamp:  time.Now(),
+			}
+
+			encK := base64.StdEncoding.EncodeToString([]byte(k))
+			cmd := fmt.Sprintf("DEL %d %s", opID, encK)
+
+			if isInFlightKill {
+				_ = worker.ExecWithInFlightKill(cmd, killFn)
+				r.oracle.RecordIndeterminate(rec)
+				atomic.AddUint64(&r.opsIndeterminate, 1)
+				return true
+			}
+
+			resp, err := worker.Exec(cmd)
+			if err != nil {
+				r.oracle.RecordIndeterminate(rec)
+				atomic.AddUint64(&r.opsIndeterminate, 1)
+				return false
+			}
+
+			if strings.HasPrefix(resp, "ACK") {
+				_ = r.oracle.RecordAck(rec)
+				atomic.AddUint64(&r.opsAcknowledged, 1)
+			} else {
+				r.oracle.RecordRejected(rec, resp)
+				atomic.AddUint64(&r.opsRejected, 1)
+			}
+			return false
+		}
+	}
 }
 
 // runCompactionCrashMode tests forced termination during active compaction.

@@ -70,6 +70,8 @@ type HarnessReport struct {
 	GoVersion        string        `json:"go_version"`
 	OSArch           string        `json:"os_arch"`
 	BinaryPath       string        `json:"binary_path"`
+	DbPath           string        `json:"db_path,omitempty"`
+	WorkspaceDir     string        `json:"workspace_dir,omitempty"`
 	OpsAttempted     uint64        `json:"ops_attempted"`
 	OpsAcknowledged  uint64        `json:"ops_acknowledged"`
 	OpsIndeterminate uint64        `json:"ops_indeterminate"`

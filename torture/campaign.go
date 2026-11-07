@@ -1352,7 +1352,7 @@ func (cr *CampaignRunner) runCategoryH() error {
 			expectedOutcome = "Atomic batch committed cleanly"
 			assertion = "berr == nil"
 
-		default:
+		case i <= 70:
 			// Rejection of batches exceeding MaxBatchOps (10,001 ops)
 			scenario = "Batch exceeding MaxBatchOps (10,001 ops) rejection"
 			ops := make([]kv.Op, 10001)
@@ -1366,6 +1366,68 @@ func (cr *CampaignRunner) runCategoryH() error {
 			}
 			expectedOutcome = "ErrInvalid"
 			assertion = "errors.Is(berr, ErrInvalid)"
+
+		case i <= 75:
+			// Valid maximum legal batch of exactly 10,000 operations
+			scenario = "Valid legal maximum batch of exactly 10,000 operations"
+			ops := make([]kv.Op, 10000)
+			for b := 0; b < 10000; b++ {
+				ops[b] = kv.Op{
+					Kind:  kv.PutOp,
+					Key:   []byte(fmt.Sprintf("k10k_%d_%d", i, b)),
+					Value: []byte(fmt.Sprintf("v_%d", b)),
+				}
+			}
+			berr := db.Batch(ops)
+			if berr != nil {
+				passed = false
+				errDetail = berr
+			} else {
+				got, gerr := db.Get([]byte(fmt.Sprintf("k10k_%d_9999", i)))
+				if gerr != nil || string(got) != "v_9999" {
+					passed = false
+					errDetail = fmt.Errorf("sample key verification failed: %v", gerr)
+				}
+			}
+			expectedOutcome = "10,000 operations committed cleanly"
+			assertion = "berr == nil && string(got) == 'v_9999'"
+
+		default:
+			// Interrupted/torn 10,000-operation batch: clean tail repair & zero partial application
+			scenario = "Interrupted torn 10,000-operation batch truncation & repair"
+			_ = db.Close()
+			rawFile, oerr := os.OpenFile(testPath, os.O_WRONLY|os.O_APPEND, 0644)
+			if oerr != nil {
+				passed = false
+				errDetail = oerr
+			} else {
+				txnHdr := kv.TxnHeader{
+					Magic:      kv.TxnHeaderMagic,
+					Version:    kv.CurrentTxnVersion,
+					TxID:       1,
+					OpCount:    10000,
+					PayloadLen: 270000,
+				}
+				_, _ = rawFile.Write(kv.EncodeTxnHeader(txnHdr))
+				_, _ = rawFile.Write(make([]byte, 64)) // partial payload
+				_ = rawFile.Sync()
+				_ = rawFile.Close()
+
+				reopened, info, rerr := kv.Open(testPath, kv.Options{})
+				if rerr != nil {
+					passed = false
+					errDetail = rerr
+				} else {
+					if info.RepairedTailBytes == 0 {
+						passed = false
+						errDetail = fmt.Errorf("expected RepairedTailBytes > 0")
+					}
+					_ = reopened.Close()
+				}
+			}
+			expectedOutcome = "Torn 10,000-op batch cleanly truncated and repaired"
+			assertion = "info.RepairedTailBytes > 0 && rerr == nil"
+			db, _, _ = kv.Open(testPath, kv.Options{})
 		}
 
 		_ = db.Close()
