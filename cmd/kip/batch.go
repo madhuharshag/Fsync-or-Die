@@ -27,6 +27,10 @@ func cmdBatch(args []string) int {
 		printError(fmt.Errorf("%w: syntax: kip batch <db-path> <file>", ErrUsage))
 		return ExitError
 	}
+	if len(args) > 2 {
+		printError(fmt.Errorf("%w: unexpected extra arguments for batch", ErrUsage))
+		return ExitError
+	}
 	dbPath := args[0]
 	filePath := args[1]
 

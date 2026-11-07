@@ -171,3 +171,4 @@ To reset demo artifacts:
 ```powershell
 Remove-Item warehouse.kip*, shipment.json -Force -ErrorAction SilentlyContinue
 ```
+

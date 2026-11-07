@@ -99,6 +99,10 @@ func cmdPut(args []string) int {
 		printError(fmt.Errorf("%w: syntax: kip put <db-path> <key> <value>", ErrUsage))
 		return ExitError
 	}
+	if len(args) > 3 {
+		printError(fmt.Errorf("%w: unexpected extra arguments for put", ErrUsage))
+		return ExitError
+	}
 	dbPath := args[0]
 	key := []byte(args[1])
 	value := []byte(args[2])
@@ -135,6 +139,10 @@ func cmdPut(args []string) int {
 func cmdGet(args []string) int {
 	if len(args) < 2 {
 		printError(fmt.Errorf("%w: syntax: kip get <db-path> <key>", ErrUsage))
+		return ExitError
+	}
+	if len(args) > 2 {
+		printError(fmt.Errorf("%w: unexpected extra arguments for get", ErrUsage))
 		return ExitError
 	}
 	dbPath := args[0]
@@ -176,6 +184,10 @@ func cmdDel(args []string) int {
 		printError(fmt.Errorf("%w: syntax: kip del <db-path> <key>", ErrUsage))
 		return ExitError
 	}
+	if len(args) > 2 {
+		printError(fmt.Errorf("%w: unexpected extra arguments for del", ErrUsage))
+		return ExitError
+	}
 	dbPath := args[0]
 	key := []byte(args[1])
 
@@ -206,6 +218,10 @@ func cmdDel(args []string) int {
 func cmdCheck(args []string) int {
 	if len(args) < 1 {
 		printError(fmt.Errorf("%w: syntax: kip check <db-path>", ErrUsage))
+		return ExitError
+	}
+	if len(args) > 1 {
+		printError(fmt.Errorf("%w: unexpected extra arguments for check", ErrUsage))
 		return ExitError
 	}
 	dbPath := args[0]
@@ -244,6 +260,10 @@ type kvEntry struct {
 func cmdDump(args []string) int {
 	if len(args) < 1 {
 		printError(fmt.Errorf("%w: syntax: kip dump <db-path>", ErrUsage))
+		return ExitError
+	}
+	if len(args) > 1 {
+		printError(fmt.Errorf("%w: unexpected extra arguments for dump", ErrUsage))
 		return ExitError
 	}
 	dbPath := args[0]
@@ -292,6 +312,10 @@ func cmdStats(args []string) int {
 		printError(fmt.Errorf("%w: syntax: kip stats <db-path>", ErrUsage))
 		return ExitError
 	}
+	if len(args) > 1 {
+		printError(fmt.Errorf("%w: unexpected extra arguments for stats", ErrUsage))
+		return ExitError
+	}
 	dbPath := args[0]
 
 	db, _, err := kv.Open(dbPath, kv.Options{ReadOnly: true})
@@ -317,6 +341,10 @@ func cmdStats(args []string) int {
 func cmdCompact(args []string) int {
 	if len(args) < 1 {
 		printError(fmt.Errorf("%w: syntax: kip compact <db-path>", ErrUsage))
+		return ExitError
+	}
+	if len(args) > 1 {
+		printError(fmt.Errorf("%w: unexpected extra arguments for compact", ErrUsage))
 		return ExitError
 	}
 	dbPath := args[0]

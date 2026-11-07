@@ -256,3 +256,4 @@ All responses are immediately flushed via `os.Stdout.Sync()`.
 2. **Indeterminate State (`ErrUncertain`):** If a disk synchronization barrier fails after payload bytes are queued, the engine returns `kv.ErrUncertain`. The CLI outputs a descriptive warning to `stderr` explaining that the transaction's persistence state cannot be guaranteed and exits with code `1`. It never claims the write succeeded and never assumes it failed.
 3. **Capacity Full (`ErrFull`):** When the configured `--max-bytes` boundary is reached, writes are safely rejected without modifying existing state.
 4. **Lock Contention (`ErrBusy`):** If another process has opened the database, `acquireProcessLock` receives `ERROR_LOCK_VIOLATION` (or `EWOULDBLOCK`), causing `kip` to report `error: open failed: kv: database file is locked by another process` and exit cleanly with code `1`.
+

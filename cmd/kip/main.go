@@ -34,7 +34,7 @@ func run(args []string) int {
 	}
 
 	// Support worker flag for direct torture-harness child process execution
-	if args[0] == "--worker" || os.Getenv("TORTURE_WORKER") == "1" {
+	if args[0] == "--worker" || (os.Getenv("TORTURE_WORKER") == "1" && (len(args) == 0 || args[0] == "--worker")) {
 		return runServeMode("", 0, false)
 	}
 

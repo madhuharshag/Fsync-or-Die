@@ -525,3 +525,119 @@ CLOSE 17
 		t.Fatalf("batch_med1 not persisted after serve: %s", stdout)
 	}
 }
+
+func TestCLI_ExtraArgumentsRejection(t *testing.T) {
+	dbPath := tempDBPath(t)
+	runCLI(t, "", "open", dbPath)
+
+	extraTests := []struct {
+		name string
+		args []string
+	}{
+		{"put_extra", []string{"put", dbPath, "k", "v", "extra"}},
+		{"get_extra", []string{"get", dbPath, "k", "extra"}},
+		{"del_extra", []string{"del", dbPath, "k", "extra"}},
+		{"check_extra", []string{"check", dbPath, "extra"}},
+		{"dump_extra", []string{"dump", dbPath, "extra"}},
+		{"stats_extra", []string{"stats", dbPath, "extra"}},
+		{"compact_extra", []string{"compact", dbPath, "extra"}},
+		{"batch_extra", []string{"batch", dbPath, "somefile", "extra"}},
+	}
+
+	for _, tt := range extraTests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, stderr, code := runCLI(t, "", tt.args...)
+			if code != ExitError || !strings.Contains(stderr, "unexpected extra arguments") {
+				t.Fatalf("expected ExitError for extra args on %s, got code=%d, stderr=%s", tt.name, code, stderr)
+			}
+		})
+	}
+}
+
+func TestCLI_CorruptedDatabaseCheck(t *testing.T) {
+	dbPath := tempDBPath(t)
+
+	// Create and populate a temporary database
+	runCLI(t, "", "open", dbPath)
+	stdout, _, code := runCLI(t, "", "put", dbPath, "intact_key", "intact_val")
+	if code != ExitSuccess || stdout != "ACK intact_key\n" {
+		t.Fatalf("setup put failed: %s", stdout)
+	}
+
+	// Verify it passes check initially
+	stdout, _, code = runCLI(t, "", "check", dbPath)
+	if code != ExitSuccess || !strings.Contains(stdout, "OK: Database integrity verified") {
+		t.Fatalf("initial check failed: %s", stdout)
+	}
+
+	// Intentionally corrupt payload bytes in the temporary file
+	data, err := os.ReadFile(dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(data) > 40 {
+		// Corrupt a byte in the transaction header/payload
+		data[38] ^= 0xFF
+		if err := os.WriteFile(dbPath, data, 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// Running check must now detect corruption and return ExitError (1)
+	_, stderr, code := runCLI(t, "", "check", dbPath)
+	if code != ExitError || (!strings.Contains(stderr, "integrity check failed") && !strings.Contains(stderr, "corrupt")) {
+		t.Fatalf("check on corrupt database should fail with error, got code=%d, stderr=%s", code, stderr)
+	}
+}
+
+func TestCLI_BatchLimit10000AndOpenMaxBytes(t *testing.T) {
+	dbPath := tempDBPath(t)
+	dir := t.TempDir()
+
+	// 1. Test open with --max-bytes flag
+	stdout, stderr, code := runCLI(t, "", "open", dbPath, "--max-bytes", "50000000")
+	if code != ExitSuccess || stderr != "" {
+		t.Fatalf("open with --max-bytes failed: code=%d, stderr=%s", code, stderr)
+	}
+
+	// Verify stats reflect the max bytes setting
+	stdout, _, code = runCLI(t, "", "stats", dbPath)
+	if code != ExitSuccess || !strings.Contains(stdout, "MaxFileBytes: 50000000") {
+		t.Fatalf("stats did not reflect MaxFileBytes: %s", stdout)
+	}
+
+	// 2. Test batch exceeding 10,000 operations
+	batchFile := filepath.Join(dir, "oversized_batch.txt")
+	var sb strings.Builder
+	for i := 0; i < 10001; i++ {
+		sb.WriteString(fmt.Sprintf("put k%d v%d\n", i, i))
+	}
+	if err := os.WriteFile(batchFile, []byte(sb.String()), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, stderr, code = runCLI(t, "", "batch", dbPath, batchFile)
+	if code != ExitError || !strings.Contains(stderr, "exceeds maximum limit 10000") {
+		t.Fatalf("batch exceeding 10000 ops did not fail properly: code=%d, stderr=%s", code, stderr)
+	}
+}
+
+func TestCLI_RepeatedOpenCloseCycles(t *testing.T) {
+	dbPath := tempDBPath(t)
+
+	// Run 15 rapid sequential put/get operations to verify clean lock acquire/release cycles
+	for i := 0; i < 15; i++ {
+		k := fmt.Sprintf("rapid_key_%d", i)
+		v := fmt.Sprintf("rapid_val_%d", i)
+
+		stdout, stderr, code := runCLI(t, "", "put", dbPath, k, v)
+		if code != ExitSuccess || stdout != fmt.Sprintf("ACK %s\n", k) || stderr != "" {
+			t.Fatalf("iteration %d put failed: code=%d, stdout=%s, stderr=%s", i, code, stdout, stderr)
+		}
+
+		stdout, stderr, code = runCLI(t, "", "get", dbPath, k)
+		if code != ExitSuccess || stdout != fmt.Sprintf("%s\n", v) || stderr != "" {
+			t.Fatalf("iteration %d get failed: code=%d, stdout=%s, stderr=%s", i, code, stdout, stderr)
+		}
+	}
+}
