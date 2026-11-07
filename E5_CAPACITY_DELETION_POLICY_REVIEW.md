@@ -42,7 +42,7 @@ Ownership Notice:             Member 1 owns capacity architecture. No code alter
 ## 2. Current Implementation Description `[VERIFIED IN SOURCE]`
 
 ### 2.1 Append-Only Architecture & The Mutation Path
-All mutations (`Put`, `Delete`, `Batch`) route through `commitBatchLocked` in [`src/kv/put_delete.go`](file:///d:/test/transaction%20and%20recovery%20engine/src/kv/put_delete.go#L43-L66).
+All mutations (`Put`, `Delete`, `Batch`) route through `commitBatchLocked` in [`src/kv/put_delete.go`](src/kv/put_delete.go#L43-L66).
 
 ```text
 Existing Database File
@@ -91,7 +91,7 @@ func CheckCapacity(currentOffset int64, additionalBytes uint64, maxBytes uint64)
 ### 2.3 Why DELETE Needs Additional Disk Space
 1. **Append-Only Invariance:** The database file is strictly append-only. Modifying an existing record in place would violate crash atomicity: a crash during an in-place overwrite corrupts the prior valid state and invalidates previously computed CRC32 checksums.
 2. **Durability of Deletion:** In order for a deletion to survive process termination or sudden power loss, the deletion event itself must be written to disk with a valid `TxnHeader`, operation payload, `CommitFooter`, and dual CRC32 checksums.
-3. **Recovery Correctness:** During restart replay (`recoverAndRepairLocked` in [`src/kv/db.go`](file:///d:/test/transaction%20and%20recovery%20engine/src/kv/db.go#L273-L370)), transactions are replayed sequentially in commit order. A tombstone encountered during replay removes the key from the in-memory index. Without an on-disk tombstone, recovery would reload the old `PutOp` and resurrect the deleted key.
+3. **Recovery Correctness:** During restart replay (`recoverAndRepairLocked` in [`src/kv/db.go`](src/kv/db.go#L273-L370)), transactions are replayed sequentially in commit order. A tombstone encountered during replay removes the key from the in-memory index. Without an on-disk tombstone, recovery would reload the old `PutOp` and resurrect the deleted key.
 4. **Physical Capacity Ceiling:** If `db.committedEnd + totalTxBytes > db.maxFileBytes`, appending the tombstone would physically exceed the user-configured storage budget.
 5. **Fail-Safe Contract:** Returning `ErrFull` is completely safe: the client is explicitly told that the mutation failed. Falsely returning `nil` when the tombstone was not synced would violate the core durability contract: *"If an ACK is returned, the mutation must survive a crash."*
 
@@ -99,7 +99,7 @@ func CheckCapacity(currentOffset int64, additionalBytes uint64, maxBytes uint64)
 
 ## 3. Exact DELETE Space Requirement `[VERIFIED IN SOURCE]`
 
-Using the little-endian binary codec defined in [`src/kv/format.go`](file:///d:/test/transaction%20and%20recovery%20engine/src/kv/format.go):
+Using the little-endian binary codec defined in [`src/kv/format.go`](src/kv/format.go):
 
 $$\begin{aligned}
 \text{Total DELETE Transaction Size} &= \text{TxnHeaderSize} + \text{OpHeaderSize} + \text{KeyLen} + \text{ValLen} + \text{CommitFooterSize} \\
@@ -185,7 +185,7 @@ $$\text{Headroom}(K) = K \times 1,095 \text{ bytes}$$
 
 ## 6. Investigation: Can Compaction Solve E5? `[VERIFIED IN SOURCE]`
 
-Member 2 inspected the compaction implementation (`compactLocked` in [`src/kv/compaction.go`](file:///d:/test/transaction%20and%20recovery%20engine/src/kv/compaction.go#L37-L286)) to determine whether automatic pre-delete compaction can resolve E5:
+Member 2 inspected the compaction implementation (`compactLocked` in [`src/kv/compaction.go`](src/kv/compaction.go#L37-L286)) to determine whether automatic pre-delete compaction can resolve E5:
 
 | Scenario | Database State Prior to Delete | Does Compaction Free Space? | Can Delete Succeed After Compaction? |
 |:---:|:--- |:---:|:---:|

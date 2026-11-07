@@ -1,0 +1,47 @@
+sequenceDiagram
+    autonumber
+    actor Judge as Test Runner / Judge
+    participant Harness as Torture Runner (torture/runner.go)
+    participant Oracle as Persistent Oracle (torture/oracle.go)
+    participant Worker as Subprocess Worker (cmd/kip serve)
+    participant Engine as kv.Engine Instance
+    participant Disk as Data & Journal Files (.kip, .oracle.json)
+
+    Judge->>Harness: Run Campaign (e.g. 1000 Cases)
+
+    loop For each test case
+        Harness->>Disk: Initialize Clean Database & Oracle State
+        Harness->>Worker: Spawn Child Subprocess ("kip serve <path>")
+        Worker->>Engine: kv.Open(path)
+        Worker-->>Harness: "READY"
+
+        loop Randomized Mutation Stream
+            Harness->>Oracle: RecordInFlight(opID, key, val)
+            Harness->>Worker: Pipe command: "PUT <opID> <b64key> <b64val>"
+            Worker->>Engine: engine.Put(key, val)
+            Engine->>Disk: pwrite + fsync
+            Engine-->>Worker: success
+            Worker-->>Harness: "ACK <opID>"
+            Harness->>Oracle: RecordAck(opID, key, val)
+            Oracle->>Disk: Persist ACK to .oracle.json
+        end
+
+        Note over Harness,Worker: Randomized Asynchronous Crash Trigger
+        Harness->>Worker: Kill Subprocess (SIGKILL / TerminateProcess)
+        Note over Worker: Process abruptly terminated at arbitrary instruction!
+
+        Note over Harness,Disk: Crash Recovery & Verification Phase
+        Harness->>Engine: Cold Open: kv.Open(path, Options{ReadOnly: true})
+        Engine->>Disk: Read log, validate dual CRCs, repair torn tail
+        Engine-->>Harness: db handle & OpenInfo{LiveKeys, RecoveredTxns}
+
+        Harness->>Engine: engine.Check() (Full Physical Integrity Scan)
+        Engine-->>Harness: Check OK (0 CRC errors, 0 corrupted headers)
+
+        Harness->>Oracle: Verify(engine)
+        Oracle->>Engine: Query all ACKed keys via engine.Get(key)
+        Engine-->>Oracle: Exact persisted bytes
+        Oracle-->>Harness: Oracle Assertion PASS: 100% of ACKed data verified!
+    end
+
+    Harness-->>Judge: Final Report: 1000/1000 PASS (Zero Data Loss)

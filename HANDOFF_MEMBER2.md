@@ -14,12 +14,12 @@
 Following the emergency departure of the reliability teammate, Member 2 absorbed all crash-recovery, incomplete-tail repair, compaction, and reliability torture-testing responsibilities.
 
 ### Owned Components:
-- **Transaction & Batch Commit Protocol:** Recovery parser and index builder ([`src/kv/db.go`](file:///d:/test/transaction%20and%20recovery%20engine/src/kv/db.go#L273-L410)).
-- **Torn-Write & Tail Repair:** Header, payload, footer, and CRC validation with safe truncation ([`src/kv/recovery_test.go`](file:///d:/test/transaction%20and%20recovery%20engine/src/kv/recovery_test.go)).
-- **Crash-Safe Compaction:** Dual-bounded batching (1,000 ops / 16 MiB payload), streaming snapshot, atomic swap, and rollback safety ([`src/kv/compaction.go`](file:///d:/test/transaction%20and%20recovery%20engine/src/kv/compaction.go)).
-- **Process Lock Separation:** Dedicated advisory lock file (`<path>.lock`) using Win32 `LockFileEx` ([`src/kv/lock_windows.go`](file:///d:/test/transaction%20and%20recovery%20engine/src/kv/lock_windows.go)) maintaining mutual exclusion during file descriptor swaps.
-- **Independent Torture Test Harness:** Standalone Go harness under [`torture/`](file:///d:/test/transaction%20and%20recovery%20engine/torture/) with an out-of-process worker, persistent ACK oracle, random crash injector, and zero dependence on internal DB state.
-- **1,000,000-Key Cold Recovery Benchmark:** Real database recovery benchmark ([`src/kv/recovery_1m_bench_test.go`](file:///d:/test/transaction%20and%20recovery%20engine/src/kv/recovery_1m_bench_test.go)) achieving 0.462s cold recovery (< 2.0s goal).
+- **Transaction & Batch Commit Protocol:** Recovery parser and index builder ([`src/kv/db.go`](src/kv/db.go#L273-L410)).
+- **Torn-Write & Tail Repair:** Header, payload, footer, and CRC validation with safe truncation ([`src/kv/recovery_test.go`](src/kv/recovery_test.go)).
+- **Crash-Safe Compaction:** Dual-bounded batching (1,000 ops / 16 MiB payload), streaming snapshot, atomic swap, and rollback safety ([`src/kv/compaction.go`](src/kv/compaction.go)).
+- **Process Lock Separation:** Dedicated advisory lock file (`<path>.lock`) using Win32 `LockFileEx` ([`src/kv/lock_windows.go`](src/kv/lock_windows.go)) maintaining mutual exclusion during file descriptor swaps.
+- **Independent Torture Test Harness:** Standalone Go harness under [`torture/`](torture/) with an out-of-process worker, persistent ACK oracle, random crash injector, and zero dependence on internal DB state.
+- **1,000,000-Key Cold Recovery Benchmark:** Real database recovery benchmark ([`src/kv/recovery_1m_bench_test.go`](src/kv/recovery_1m_bench_test.go)) achieving 0.462s cold recovery (< 2.0s goal).
 
 ---
 

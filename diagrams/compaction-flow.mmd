@@ -1,0 +1,59 @@
+sequenceDiagram
+    autonumber
+    actor Caller as Client / CLI (kip compact)
+    participant DB as DB Coordinator (db.go)
+    participant Index as Active Index (index.go)
+    participant Compactor as Compactor (compaction.go)
+    participant TmpFile as Staging File (<path>.compact.tmp)
+    participant OrigFile as Authoritative File (<path>)
+    participant OS as OS Filesystem
+
+    Caller->>DB: Compact()
+    Note over DB: Acquire exclusive lock (db.mu.Lock)
+    DB->>Compactor: compactLocked()
+
+    Note over Compactor,Index: Step 1: Snapshot Live Keys
+    Compactor->>Index: Snapshot()
+    Index-->>Compactor: liveEntries (sorted snapshot of live keys only)
+
+    Note over Compactor,TmpFile: Step 2: Initialize Replacement File
+    Compactor->>OS: Remove(<path>.compact.tmp) (clean stray temp)
+    Compactor->>OS: OpenFile(<path>.compact.tmp, O_CREATE|O_RDWR|O_EXCL)
+    Compactor->>TmpFile: WriteAtFull(FileHeader, offset=0)
+
+    Note over Compactor,TmpFile: Step 3: Stream Live Batches (Dual-Bounded)
+    loop While live keys remain
+        Note over Compactor: Chunk bounded by: <= 1000 ops AND <= 16 MiB payload
+        Compactor->>OrigFile: Read live values at current file offsets
+        Compactor->>Compactor: Assemble TxnHeader, Payload, CommitFooter, Dual CRCs
+        Compactor->>TmpFile: WriteAtFull(chunkTxnBytes, offset=newCommittedEnd)
+        Compactor->>Compactor: Track new offsets in staged newIndex
+    end
+
+    Note over Compactor,TmpFile: Step 4: Durable Flush
+    Compactor->>TmpFile: SyncFile() (fsync to disk)
+    alt Sync Failure
+        Compactor->>OS: Remove(<path>.compact.tmp)
+        Compactor-->>DB: return sync error (original untouched)
+    end
+
+    Note over Compactor,OrigFile: Step 5: Close Active Descriptors (Windows Compatibility)
+    Compactor->>OrigFile: Close()
+    Compactor->>TmpFile: Close()
+
+    Note over Compactor,OS: Step 6: Atomic File Swap
+    Compactor->>OS: os.Rename(<path>.compact.tmp, <path>)
+    alt Rename Fails
+        Compactor->>OS: Reopen original (<path>)
+        Compactor->>OS: Remove(<path>.compact.tmp)
+        Compactor-->>DB: return rollback error (original restored)
+    end
+
+    Note over Compactor,OrigFile: Step 7: Reopen Authoritative File & Publish
+    Compactor->>OS: OpenFile(<path>, O_RDWR)
+    Compactor->>Index: ReplaceWith(newIndex)
+    Note over DB: db.file = newFile<br/>db.committedEnd = newCommittedEnd<br/>db.nextTxID = nextTxID<br/>db.compactionCount++
+
+    Compactor-->>DB: return nil (Success)
+    DB-->>Caller: return nil
+    Note over Caller: Dead space reclaimed, 100% live keys preserved

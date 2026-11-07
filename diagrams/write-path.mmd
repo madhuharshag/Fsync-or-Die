@@ -1,0 +1,63 @@
+sequenceDiagram
+    autonumber
+    actor Client as Caller / CLI (cmd/kip)
+    participant DB as DB Coordinator (db.go)
+    participant Cap as Capacity Manager (capacity.go)
+    participant Codec as Binary Codec (format.go)
+    participant IO as Positioned I/O (io.go)
+    participant Disk as Physical Storage (OS/FS)
+    participant Index as In-Memory Index (index.go)
+
+    Client->>DB: Put(key, val) / Batch(ops)
+    Note over DB: Acquire exclusive mutex (db.mu.Lock)
+    DB->>DB: checkStateLocked() (verify not closed, not poisoned)
+
+    Note over DB,Cap: Step 1: Input Validation
+    DB->>DB: Validate key (1..1024B), val (0..1MB), batch (1..10000 ops)
+
+    Note over DB,Cap: Step 2: Capacity Preflight
+    DB->>Cap: CheckCapacity(committedEnd, totalTxBytes, maxFileBytes)
+    alt Exceeds MaxFileBytes
+        Cap-->>DB: return ErrFull
+        DB-->>Client: return ErrFull (0 bytes written, 0 state changed)
+    end
+
+    Note over DB,Codec: Step 3 & 4: Header & Payload Encoding
+    DB->>Codec: Construct TxnHeader(Magic="TXN1", TxID, OpCount, PayloadLen)
+    DB->>Codec: Encode operations: [Kind:1B][KeyLen:2B][ValLen:4B][Key][Val]
+
+    Note over DB,Codec: Step 5: Dual Checksum & Footer Assembly
+    DB->>Codec: Compute TxnCRC = CRC32(TxnHeader || Payload)
+    DB->>Codec: Construct CommitFooter(Magic="COMMIT01", TxID, TotalBytes, TxnCRC)
+    DB->>Codec: Compute FooterCRC = CRC32(FooterBytes[0..28])
+
+    Note over DB,Disk: Step 6: Positioned Append Write
+    DB->>IO: WriteAtFull(file, TxnBytes, offset=committedEnd)
+    IO->>Disk: pwrite(fd, TxnBytes, committedEnd)
+    alt Write Error / Short Write
+        IO-->>DB: return I/O Error
+        DB->>DB: Poison handle (db.poisoned = err)
+        DB-->>Client: return ErrUncertain (NEVER SUCCESS)
+    end
+
+    Note over DB,Disk: Step 7: Unconditional Physical Synchronization
+    DB->>IO: SyncFile(file)
+    IO->>Disk: fsync(fd) / FlushFileBuffers(handle)
+    alt fsync Fails
+        IO-->>DB: return Sync Error
+        DB->>DB: Poison handle (db.poisoned = err)
+        DB-->>Client: return ErrUncertain (NEVER SUCCESS)
+    end
+
+    Note over DB,Index: Step 8: Atomic In-Memory Index Publication
+    DB->>Index: ApplyUpdates(pendingUpdates)
+    Index-->>DB: Index updated with live ValueOffset/ValueLength
+
+    Note over DB: Step 9: Transaction Accounting
+    DB->>DB: committedEnd += totalTxBytes
+    DB->>DB: nextTxID++
+    DB->>DB: txCount++
+
+    Note over DB,Client: Step 10: Successful Return & Acknowledgment
+    DB-->>Client: return nil (SUCCESS)
+    Note over Client: CLI emits "ACK <key>" / "ACK <count>" to stdout

@@ -1,0 +1,48 @@
+flowchart TD
+    Start(["Call Open(path, opts)"]) --> Lock["1. Acquire Advisory Process Lock (<path>.lock)\nWindows: LockFileEx | POSIX: flock"]
+    Lock -->|Lock Held by Another Process| ErrBusy["Return ErrBusy (exit)"]
+    Lock --> CleanTmp["2. Remove Stray Temporary File\nRemove(<path>.compact.tmp) if not ReadOnly"]
+    CleanTmp --> OpenData["3. Open Authoritative Data File\nFlags: os.O_RDWR | os.O_CREATE (no O_TRUNC, no O_APPEND)"]
+    OpenData --> StatFile["4. Stat File Size (fi.Size())"]
+
+    StatFile -->|Size == 0| FreshFile{"opts.ReadOnly?"}
+    FreshFile -->|Yes| ErrCorruptInit["Return ErrCorrupt (cannot init read-only)"]
+    FreshFile -->|No| InitHeader["Write 32B FileHeader (Magic: KIPDB001)\nSyncFile to Disk\nSet committedEnd = 32, nextTxID = 1"]
+    InitHeader --> SuccessFresh["Return OpenInfo{Recreated: true, LiveKeys: 0}"]
+
+    StatFile -->|Size > 0 and Size < 32| ShortFile["Return ErrCorrupt: file smaller than 32B header"]
+
+    StatFile -->|Size >= 32| ReadHeader["Read 32B FileHeader at offset 0"]
+    ReadHeader --> ValidateHeader{"Validate Magic\nVersion & CRC"}
+    ValidateHeader -->|Invalid Magic/Version/CRC| HeaderCorrupt["Return ErrCorrupt / ErrVersion"]
+    ValidateHeader -->|Valid| ScanLoop["5. Begin Sequential Scan\nSet offset = 32, txCount = 0"]
+
+    ScanLoop --> CheckEOF{"offset < fileSize?"}
+    CheckEOF -->|No (Reached EOF Cleanly)| CheckTail["6. Tail Check & Repair"]
+
+    CheckEOF -->|Yes| ReadTxnHdr["Read 32B TxnHeader at offset"]
+    ReadTxnHdr --> ValidTxnHdr{"Magic == 'TXN1'\nand bounded payload?"}
+    ValidTxnHdr -->|No / Incomplete| BreakScan["Stop Scan (torn or uncommitted tail)"]
+
+    ValidTxnHdr -->|Yes| ReadPayload["Read Payload (txnHeader.PayloadLen)"]
+    ReadPayload --> ReadFooter["Read 32B CommitFooter"]
+    ReadFooter --> ValidFooter{"Magic == 'COMMIT01'\nTxID matches\nTotalBytes matches"}
+    ValidFooter -->|No| BreakScan
+
+    ValidFooter -->|Yes| DualCRC{"Verify Dual CRCs:\n1. TxnCRC == CRC(Hdr||Payload)\n2. FooterCRC == CRC(Footer[0..28])"}
+    DualCRC -->|Mismatch| BreakScan
+
+    DualCRC -->|Matched| ReplayOps["Decode Operations in Payload\nVerify decoded opCount == txnHeader.OpCount\nBuild IndexUpdate list"]
+    ReplayOps --> ApplyIndex["db.index.ApplyUpdates(updates)\nlastTxID = txnHeader.TxID\ntxCount++\noffset += totalTxBytes"]
+    ApplyIndex --> ScanLoop
+
+    BreakScan --> CheckTail
+    CheckTail --> HasTornBytes{"offset < fileSize?"}
+    HasTornBytes -->|No torn bytes| Finalize["Set db.committedEnd = offset\nSet db.nextTxID = lastTxID + 1\nSet db.txCount = txCount"]
+
+    HasTornBytes -->|Torn bytes detected| CheckRO{"opts.ReadOnly?"}
+    CheckRO -->|Yes| RejectRO["Return ErrCorrupt (uncommitted tail in read-only mode)"]
+    CheckRO -->|No| Truncate["TruncateFile(offset)\nSyncFile to persist truncation\nSet RepairedBytes = fileSize - offset"]
+    Truncate --> Finalize
+
+    Finalize --> SuccessExisting["Record RecoveryDurationNs\nReturn Engine & OpenInfo{LiveKeys, RecoveredTxns, RepairedBytes}"]

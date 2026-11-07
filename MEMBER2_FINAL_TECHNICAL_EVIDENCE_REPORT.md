@@ -46,19 +46,19 @@ Working Tree Status: Clean commits ready; all files tracked and formatted.
 
 | File | Status | Purpose / Description |
 | :--- | :--- | :--- |
-| [`src/kv/compaction.go`](file:///d:/test/transaction%20and%20recovery%20engine/src/kv/compaction.go) | Modified | Dual-bounded compaction batching (1,000 ops / 16 MiB), `opBytes` pre-check, and internal test seams (`compactionHook`, `compactionRenameFn`). |
-| [`src/kv/compaction_test.go`](file:///d:/test/transaction%20and%20recovery%20engine/src/kv/compaction_test.go) | Modified | Added tests for byte boundary splitting, single max value (1 MB), multi-large values, individually oversized op rejection, and op-count chunking. |
-| [`src/kv/recovery_test.go`](file:///d:/test/transaction%20and%20recovery%20engine/src/kv/recovery_test.go) | Modified | Corrected `TestRecovery_OneByteTruncation_F4` using low-level unacknowledged trailing transaction fixture. |
-| [`src/kv/subprocess_test.go`](file:///d:/test/transaction%20and%20recovery%20engine/src/kv/subprocess_test.go) | Created | 9 deterministic subprocess tests for lock exclusion, lock continuity during compaction, kill release, interrupted compaction, and native Windows sharing violations. |
-| [`src/kv/recovery_1m_bench_test.go`](file:///d:/test/transaction%20and%20recovery%20engine/src/kv/recovery_1m_bench_test.go) | Created | Cold recovery benchmark and test for 1,000,000 keys. |
-| [`torture/types.go`](file:///d:/test/transaction%20and%20recovery%20engine/torture/types.go) | Created | Data models for operations, records, crash hooks, configuration, and audit reports. |
-| [`torture/oracle.go`](file:///d:/test/transaction%20and%20recovery%20engine/torture/oracle.go) | Created | Independent persistent ACK oracle with disk journal, indeterminate operation handling, and full DB validation. |
-| [`torture/worker.go`](file:///d:/test/transaction%20and%20recovery%20engine/torture/worker.go) | Created | Child worker process loop serving commands over stdin/stdout pipes. |
-| [`torture/runner.go`](file:///d:/test/transaction%20and%20recovery%20engine/torture/runner.go) | Created | Subprocess lifecycle manager, random crash scheduler, and multi-writer coordinator. |
-| [`torture/main.go`](file:///d:/test/transaction%20and%20recovery%20engine/torture/main.go) | Created | CLI interface for torture testing with `--seed`, `--ops`, `--crashes`, and report formatting. |
-| [`torture/torture_test.go`](file:///d:/test/transaction%20and%20recovery%20engine/torture/torture_test.go) | Created | Acceptance test suite verifying all 15 Phase 6 criteria. |
-| [`HANDOFF_MEMBER2.md`](file:///d:/test/transaction%20and%20recovery%20engine/HANDOFF_MEMBER2.md) | Created | Architecture, recovery protocol, compaction limits, and integration guide for Member 1. |
-| [`MEMBER2_FINAL_TECHNICAL_EVIDENCE_REPORT.md`](file:///d:/test/transaction%20and%20recovery%20engine/MEMBER2_FINAL_TECHNICAL_EVIDENCE_REPORT.md) | Created | This complete final technical evidence report. |
+| [`src/kv/compaction.go`](src/kv/compaction.go) | Modified | Dual-bounded compaction batching (1,000 ops / 16 MiB), `opBytes` pre-check, and internal test seams (`compactionHook`, `compactionRenameFn`). |
+| [`src/kv/compaction_test.go`](src/kv/compaction_test.go) | Modified | Added tests for byte boundary splitting, single max value (1 MB), multi-large values, individually oversized op rejection, and op-count chunking. |
+| [`src/kv/recovery_test.go`](src/kv/recovery_test.go) | Modified | Corrected `TestRecovery_OneByteTruncation_F4` using low-level unacknowledged trailing transaction fixture. |
+| [`src/kv/subprocess_test.go`](src/kv/subprocess_test.go) | Created | 9 deterministic subprocess tests for lock exclusion, lock continuity during compaction, kill release, interrupted compaction, and native Windows sharing violations. |
+| [`src/kv/recovery_1m_bench_test.go`](src/kv/recovery_1m_bench_test.go) | Created | Cold recovery benchmark and test for 1,000,000 keys. |
+| [`torture/types.go`](torture/types.go) | Created | Data models for operations, records, crash hooks, configuration, and audit reports. |
+| [`torture/oracle.go`](torture/oracle.go) | Created | Independent persistent ACK oracle with disk journal, indeterminate operation handling, and full DB validation. |
+| [`torture/worker.go`](torture/worker.go) | Created | Child worker process loop serving commands over stdin/stdout pipes. |
+| [`torture/runner.go`](torture/runner.go) | Created | Subprocess lifecycle manager, random crash scheduler, and multi-writer coordinator. |
+| [`torture/main.go`](torture/main.go) | Created | CLI interface for torture testing with `--seed`, `--ops`, `--crashes`, and report formatting. |
+| [`torture/torture_test.go`](torture/torture_test.go) | Created | Acceptance test suite verifying all 15 Phase 6 criteria. |
+| [`HANDOFF_MEMBER2.md`](HANDOFF_MEMBER2.md) | Created | Architecture, recovery protocol, compaction limits, and integration guide for Member 1. |
+| [`MEMBER2_FINAL_TECHNICAL_EVIDENCE_REPORT.md`](MEMBER2_FINAL_TECHNICAL_EVIDENCE_REPORT.md) | Created | This complete final technical evidence report. |
 
 ---
 
@@ -297,7 +297,7 @@ Meets < 2.0s Goal:    true
 ## 15. Integration Instructions for Member 1
 
 1. **Review Changed Files:**
-   - Inspect [`src/kv/compaction.go`](file:///d:/test/transaction%20and%20recovery%20engine/src/kv/compaction.go), [`src/kv/subprocess_test.go`](file:///d:/test/transaction%20and%20recovery%20engine/src/kv/subprocess_test.go), [`src/kv/recovery_test.go`](file:///d:/test/transaction%20and%20recovery%20engine/src/kv/recovery_test.go), [`src/kv/recovery_1m_bench_test.go`](file:///d:/test/transaction%20and%20recovery%20engine/src/kv/recovery_1m_bench_test.go), and [`torture/`](file:///d:/test/transaction%20and%20recovery%20engine/torture/).
+   - Inspect [`src/kv/compaction.go`](src/kv/compaction.go), [`src/kv/subprocess_test.go`](src/kv/subprocess_test.go), [`src/kv/recovery_test.go`](src/kv/recovery_test.go), [`src/kv/recovery_1m_bench_test.go`](src/kv/recovery_1m_bench_test.go), and [`torture/`](torture/).
    - Confirm that shared contracts (`src/kv/contract.go`, `src/kv/format.go`) remain untouched.
 2. **Execute Full Test Suite:**
    ```powershell

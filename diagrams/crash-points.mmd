@@ -1,0 +1,36 @@
+flowchart LR
+    subgraph MutationTimeline["Transaction Execution Timeline & Crash Failure Points"]
+        direction TB
+        Start["Start Mutation Call"] --> P1{"P1: Crash before Write"}
+        P1 -->|No Crash| WriteHdr["Write 32B TxnHeader"]
+        WriteHdr --> P2{"P2: Crash in TxnHeader"}
+        P2 -->|No Crash| WritePayload["Write Operation Payload"]
+        WritePayload --> P3{"P3: Crash in Payload"}
+        P3 -->|No Crash| WriteFooter["Write 32B CommitFooter"]
+        WriteFooter --> P4{"P4: Crash in Footer"}
+        P4 -->|No Crash| CallSync["Invoke fsync / SyncFile()"]
+        CallSync --> P5{"P5: Crash during fsync"}
+        P5 -->|No Crash| PublishIndex["Apply Index & Advance Offset"]
+        PublishIndex --> P6{"P6: Crash after fsync, before ACK"}
+        P6 -->|No Crash| ReturnACK["Return Success / Emit ACK"]
+        ReturnACK --> P7["P7: Crash after ACK returned"]
+    end
+
+    subgraph DiskAndRecovery["On-Disk State & Recovery Outcome"]
+        direction TB
+        R1["Disk: Previous committedEnd unchanged\nRecovery: Clean; 0 bytes truncated\nClient: Never ACKed; operation lost"]
+        R2["Disk: 1..31 partial bytes past committedEnd\nRecovery: Truncates torn header to committedEnd\nClient: Never ACKed; operation discarded"]
+        R3["Disk: Full header + partial payload bytes\nRecovery: Bounds check / EOF truncation\nClient: Never ACKed; operation discarded"]
+        R4["Disk: Header + payload + torn footer\nRecovery: Dual CRC mismatch; truncated\nClient: Never ACKed; operation discarded"]
+        R5["Disk: Dirty OS buffers lost on power loss\nRecovery: Reads only durable bytes; truncates torn tail\nClient: Never ACKed; operation discarded"]
+        R6["Disk: 100% durable on non-volatile storage!\nRecovery: Fully recovered; index populated!\nClient: In-flight / unconfirmed write is preserved"]
+        R7["Disk: 100% durable on non-volatile storage!\nRecovery: Fully recovered; index populated!\nClient: Acknowledged write is permanently safe"]
+    end
+
+    P1 -.-> R1
+    P2 -.-> R2
+    P3 -.-> R3
+    P4 -.-> R4
+    P5 -.-> R5
+    P6 -.-> R6
+    P7 -.-> R7

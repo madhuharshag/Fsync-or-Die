@@ -101,7 +101,7 @@ All tests executed on native Windows 11 (`go1.27.3 windows/386`, 24 cores):
 
 ## 4. Deliverable Patch Specification
 
-The deliverable patch is located at [`D:\member3-torture-scratch\member3_torture_hardening.patch`](file:///D:/member3-torture-scratch/member3_torture_hardening.patch). It modifies exclusively `torture/`:
+The deliverable patch was integrated into `torture/` from commit `41e87af` (branch `feat/torture-harness`). It modifies exclusively `torture/`:
 
 ```text
  torture/campaign.go     |   64 ++++++

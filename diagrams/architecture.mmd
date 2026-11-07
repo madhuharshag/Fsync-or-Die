@@ -1,0 +1,49 @@
+flowchart TD
+    subgraph ClientLayer["Client & Test Interfaces"]
+        CLI["CLI Tool (cmd/kip)\n[open, put, get, del, batch, check, dump, stats, compact, serve]"]
+        Torture["Independent Crash Torture Harness (torture/)\n[Runner, Worker, Persistent JSON Oracle, Crash Scheduler]"]
+    end
+
+    subgraph API["Public Engine Interface (src/kv/contract.go)"]
+        Engine["Engine Interface\nPut | Get | Delete | Batch | Check | Scan | Stats | Compact | Close"]
+    end
+
+    subgraph CoreEngine["Core Storage Engine (src/kv/)"]
+        Lock["Advisory Process Lock (<path>.lock)\nWindows: LockFileEx | POSIX: flock"]
+        DB["DB Coordinator (db.go)\nMutex: db.mu (sync.Mutex)"]
+        Cap["Capacity Accounting (capacity.go)\nChecked math vs MaxFileBytes"]
+        Index["In-Memory Index (index.go)\nmap[string]IndexEntry (12B per key)\nOffset (int64) + Length (uint32)"]
+        TxnWriter["Transaction Commit Pipeline (put_delete.go)\nAtomic batch assembly & serialization"]
+        Checker["Full-File Integrity Checker (db.Check)\nNon-destructive scan & dual CRC verification"]
+        Compactor["Streaming Compactor (compaction.go)\nDual-bounded: 1000 ops / 16 MiB batch"]
+    end
+
+    subgraph Storage["Non-Volatile Storage (APFS / Ext4 / NTFS)"]
+        AuthoritativeLog[("Authoritative Data File (<path>)\n[FileHeader: 32B (KIPDB001)]\n[Txn 1: 32B Hdr + Payload + 32B Footer]\n[Txn 2: 32B Hdr + Payload + 32B Footer]\n...")]
+        CompactionTemp[("Compaction Temporary (<path>.compact.tmp)\n[Streaming new log without dead keys]")]
+    end
+
+    CLI --> Engine
+    Torture --> CLI
+    Torture -->|IPC Stdin/Stdout| Engine
+    Engine --> Lock
+    Engine --> DB
+    DB --> Cap
+    DB --> Index
+    DB --> TxnWriter
+    DB --> Checker
+    DB --> Compactor
+
+    TxnWriter -->|1. WriteAtFull (Positioned Append)| AuthoritativeLog
+    TxnWriter -->|2. SyncFile (Unconditional fsync)| AuthoritativeLog
+    TxnWriter -->|3. Publish Updates| Index
+
+    Engine -->|Point Read (Get)| Index
+    Index -->|Pread at ValueOffset| AuthoritativeLog
+
+    Checker -->|Read & Validate Headers/Payloads/CRCs| AuthoritativeLog
+
+    Compactor -->|1. Scan Live Keys| Index
+    Compactor -->|2. Stream & Sync Batches| CompactionTemp
+    Compactor -->|3. Atomic Rename Over Original| AuthoritativeLog
+    Compactor -->|4. Swap Index| Index
