@@ -1,22 +1,27 @@
+// Package kv implements the Fsync-or-Die core storage engine for Team Innovexa.
+// Design invariants:
+// - Single file append-only write-ahead log.
+// - All mutations are committed via dual-checksummed transaction frames.
+// - Exclusive advisory process lock on <path>.lock.
+// - RAM index stores 64-bit file offsets and 32-bit lengths; values stay on disk.
+// - fsync/fdatasync before acknowledging success.
 package kv
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"hash/crc32"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 )
 
-// DB represents an open Fsync-or-Die database instance.
-// DB implements the Engine interface. All public methods serialize through mu.
+// DB represents an open Fsync-or-Die storage engine instance.
 type DB struct {
-	mu sync.Mutex
-
-	path     string
-	file     *os.File // Primary authoritative data file
+	path     string   // Authoritative data file path
+	lockPath string   // Advisory process lock path (<path>.lock)
+	file     *os.File // Open file descriptor for data file
 	lockFile *os.File // Advisory process lock file (<path>.lock)
 	index    *Index   // RAM key-to-offset index
 
@@ -30,27 +35,25 @@ type DB struct {
 	closed   bool  // Marked true after Close() finishes
 	poisoned error // Non-nil if a fatal, unrecoverable I/O failure occurred
 
-	syncSeam func(f *os.File) error // Internal test seam: allows injecting synchronization failures in tests
+	mu sync.RWMutex // Protects all internal state and serializes mutations
 }
 
-// Open initializes or reopens a database at path with the specified options.
+// Open opens or creates an authoritative database file at path.
+// It acquires an exclusive advisory lock, validates or initializes the file header,
+// and recovers committed transactions, truncating any incomplete tail.
 func Open(path string, opts Options) (Engine, OpenInfo, error) {
-	start := time.Now()
-	if path == "" {
-		return nil, OpenInfo{}, fmt.Errorf("%w: empty database path", ErrInvalid)
-	}
+	startTime := time.Now()
 
-	// 1. Ensure directory exists
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return nil, OpenInfo{}, fmt.Errorf("failed to create directory %s: %w", dir, err)
-	}
-
-	// 2. Acquire process-level exclusive advisory lock
+	// 1. Acquire non-blocking exclusive advisory lock on <path>.lock
 	lockPath := path + ".lock"
 	lockFile, err := acquireProcessLock(lockPath)
 	if err != nil {
 		return nil, OpenInfo{}, err
+	}
+
+	// Clean up any stray temporary file from an interrupted compaction (Scenario C5)
+	if !opts.ReadOnly {
+		_ = os.Remove(path + ".compact.tmp")
 	}
 
 	// 3. Open authoritative data file (NO O_TRUNC, NO O_APPEND)
@@ -58,53 +61,49 @@ func Open(path string, opts Options) (Engine, OpenInfo, error) {
 	if opts.ReadOnly {
 		openFlags = os.O_RDONLY
 	}
-
-	dataFile, err := os.OpenFile(path, openFlags, 0644)
+	f, err := os.OpenFile(path, openFlags, 0644)
 	if err != nil {
 		_ = releaseProcessLock(lockFile)
-		return nil, OpenInfo{}, fmt.Errorf("failed to open data file %s: %w", path, err)
-	}
-
-	fi, err := dataFile.Stat()
-	if err != nil {
-		_ = dataFile.Close()
-		_ = releaseProcessLock(lockFile)
-		return nil, OpenInfo{}, fmt.Errorf("failed to stat data file: %w", err)
+		return nil, OpenInfo{}, fmt.Errorf("failed to open database file: %w", err)
 	}
 
 	db := &DB{
 		path:         path,
-		file:         dataFile,
+		lockPath:     lockPath,
+		file:         f,
 		lockFile:     lockFile,
 		index:        NewIndex(),
 		maxFileBytes: opts.MaxFileBytes,
 		readOnly:     opts.ReadOnly,
-		nextTxID:     1,
-		committedEnd: 0,
+	}
+
+	// 4. Inspect file size
+	fi, err := f.Stat()
+	if err != nil {
+		_ = db.Close()
+		return nil, OpenInfo{}, fmt.Errorf("failed to stat database file: %w", err)
 	}
 
 	var openInfo OpenInfo
 
 	if fi.Size() == 0 {
-		// New file initialization
 		if opts.ReadOnly {
 			_ = db.Close()
-			return nil, OpenInfo{}, fmt.Errorf("%w: cannot initialize new database in read-only mode", ErrInvalid)
+			return nil, OpenInfo{}, fmt.Errorf("%w: cannot initialize new database in read-only mode", ErrCorrupt)
 		}
-		header := NewFileHeader(opts.MaxFileBytes)
-		headerBytes := EncodeFileHeader(header)
-		if err := WriteAtFull(db.file, headerBytes, 0); err != nil {
+		// Fresh file: write immutable 32-byte file header
+		hdrBytes := EncodeFileHeader(NewFileHeader())
+		if err := WriteAtFull(db.file, hdrBytes, 0); err != nil {
 			_ = db.Close()
 			return nil, OpenInfo{}, fmt.Errorf("failed to write initial file header: %w", err)
 		}
 		if err := SyncFile(db.file); err != nil {
 			_ = db.Close()
-			return nil, OpenInfo{}, err
+			return nil, OpenInfo{}, fmt.Errorf("failed to sync initial file header: %w", err)
 		}
-		db.committedEnd = FileHeaderSize
+		db.committedEnd = int64(FileHeaderSize)
 		db.nextTxID = 1
 		openInfo.Recreated = true
-		openInfo.LastTxID = 0
 		openInfo.LiveKeyCount = 0
 	} else {
 		// Reopening existing file: read and validate immutable file header
@@ -120,61 +119,66 @@ func Open(path string, opts Options) (Engine, OpenInfo, error) {
 		header, err := DecodeFileHeader(headerBuf)
 		if err != nil {
 			_ = db.Close()
-			return nil, OpenInfo{}, err
+			return nil, OpenInfo{}, fmt.Errorf("%w: %v", ErrCorrupt, err)
+		}
+		if !bytes.Equal(header.Magic[:], []byte(FileMagic)) {
+			_ = db.Close()
+			return nil, OpenInfo{}, fmt.Errorf("%w: invalid file magic %q", ErrCorrupt, string(header.Magic[:]))
+		}
+		if header.Version != FileFormatVersion {
+			_ = db.Close()
+			return nil, OpenInfo{}, fmt.Errorf("%w: unsupported file version %d", ErrCorrupt, header.Version)
 		}
 
-		// Persisted-cap policy: if caller specifies 0 (unlimited), adopt persisted cap from header
-		if db.maxFileBytes == 0 && header.MaxFileBytes > 0 {
-			db.maxFileBytes = header.MaxFileBytes
-		}
-
-		db.committedEnd = FileHeaderSize
-
-		// Recover transactions and repair any uncommitted tail
+		// Sequential scan and recovery
 		info, err := db.recoverAndRepairLocked()
 		if err != nil {
 			_ = db.Close()
-			return nil, OpenInfo{}, fmt.Errorf("recovery failed: %w", err)
+			return nil, OpenInfo{}, err
 		}
 		openInfo = info
 	}
 
-	openInfo.RecoveryDurationNs = time.Since(start).Nanoseconds()
+	openInfo.RecoveryDurationNs = time.Since(startTime).Nanoseconds()
 	return db, openInfo, nil
 }
 
-// Close flushes buffers, releases locks, and marks the database closed.
+// Close gracefully closes the database. It flushes unwritten data if any, closes
+// the underlying file descriptor, releases the advisory process lock, and frees memory.
 func (db *DB) Close() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
 
 	if db.closed {
-		return nil
+		return ErrClosed
 	}
 	db.closed = true
 
-	var errs []error
+	var firstErr error
 	if db.file != nil {
-		if !db.readOnly {
-			if err := db.file.Sync(); err != nil {
-				errs = append(errs, err)
+		if !db.readOnly && db.poisoned == nil {
+			if err := SyncFile(db.file); err != nil && firstErr == nil {
+				firstErr = err
 			}
 		}
-		if err := db.file.Close(); err != nil {
-			errs = append(errs, err)
+		if err := db.file.Close(); err != nil && firstErr == nil {
+			firstErr = err
 		}
+		db.file = nil
 	}
 
 	if db.lockFile != nil {
-		if err := releaseProcessLock(db.lockFile); err != nil {
-			errs = append(errs, err)
+		if err := releaseProcessLock(db.lockFile); err != nil && firstErr == nil {
+			firstErr = err
 		}
+		db.lockFile = nil
 	}
 
-	return errors.Join(errs...)
+	return firstErr
 }
 
-// checkStateLocked verifies that the database is usable. Must be called with db.mu held.
+// checkStateLocked verifies that the database is open, writable (if required),
+// and not poisoned by an earlier fatal I/O failure. Must be called under db.mu.
 func (db *DB) checkStateLocked() error {
 	if db.closed {
 		return ErrClosed
@@ -185,10 +189,10 @@ func (db *DB) checkStateLocked() error {
 	return nil
 }
 
-// Stats returns a snapshot of runtime metrics.
+// Stats returns current database telemetry snapshot.
 func (db *DB) Stats() Stats {
-	db.mu.Lock()
-	defer db.mu.Unlock()
+	db.mu.RLock()
+	defer db.mu.RUnlock()
 
 	var size uint64
 	if db.file != nil {
@@ -198,7 +202,7 @@ func (db *DB) Stats() Stats {
 	}
 
 	return Stats{
-		LiveKeys:        uint64(db.index.Len()),
+		LiveKeyCount:    db.index.Count(),
 		FileSizeBytes:   size,
 		MaxFileBytes:    db.maxFileBytes,
 		LastTxID:        db.nextTxID - 1,
@@ -207,10 +211,13 @@ func (db *DB) Stats() Stats {
 	}
 }
 
-// Check validates format, header, and sequential transactions across the file.
+// Check performs a full structural integrity scan of the authoritative file.
+// It verifies FileHeader, all TxnHeaders, payload bounds, OpCount consistency,
+// and dual CRC32 checksums for every transaction without altering state.
 func (db *DB) Check() error {
-	db.mu.Lock()
-	defer db.mu.Unlock()
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
 	if err := db.checkStateLocked(); err != nil {
 		return err
 	}
@@ -318,79 +325,72 @@ func (db *DB) Check() error {
 	return nil
 }
 
-// Scan iterates through all live entries. fn receives caller-owned slices.
-// fn must not reenter db.
+// Scan iterates over all live key-value pairs in lexicographical key order.
 func (db *DB) Scan(fn func(key, value []byte) error) error {
-	db.mu.Lock()
+	db.mu.RLock()
+	defer db.mu.RUnlock()
+
 	if err := db.checkStateLocked(); err != nil {
-		db.mu.Unlock()
 		return err
 	}
 
-	// Collect live keys and offsets while holding lock
-	type readTarget struct {
-		key   []byte
-		entry IndexEntry
-	}
-	targets := make([]readTarget, 0, db.index.Len())
-	_ = db.index.ForEach(func(k []byte, e IndexEntry) error {
-		targets = append(targets, readTarget{key: k, entry: e})
-		return nil
-	})
-	db.mu.Unlock()
-
-	// Perform individual reads and invoke callback outside mutex lock
-	for _, target := range targets {
-		val, err := db.Get(target.key)
-		if err != nil {
-			if errors.Is(err, ErrNotFound) {
-				// Key was deleted concurrently
-				continue
-			}
-			return err
+	snap := db.index.Snapshot()
+	for _, entry := range snap {
+		valBuf := make([]byte, entry.Length)
+		if err := ReadAtFull(db.file, valBuf, int64(entry.Offset)); err != nil {
+			return fmt.Errorf("scan read error for key %s: %w", string(entry.Key), err)
 		}
-		if err := fn(target.key, val); err != nil {
+		if err := fn(entry.Key, valBuf); err != nil {
+			if errors.Is(err, ErrIterationStop) {
+				return nil
+			}
 			return err
 		}
 	}
 	return nil
 }
 
-// Compact delegates to Member 2's crash-safe compaction implementation.
+// Compact executes a crash-safe compaction of live data into a new log file,
+// reclaiming space occupied by tombstones and overwritten keys.
 func (db *DB) Compact() error {
 	db.mu.Lock()
 	defer db.mu.Unlock()
-	if err := db.checkStateLocked(); err != nil {
+	if err := db.compactLocked(); err != nil {
 		return err
 	}
-	return fmt.Errorf("%w: crash-safe compaction is owned by Member 2", ErrInvalid)
+	db.compactionCount++
+	return nil
 }
 
 // recoverAndRepairLocked performs sequential recovery of committed transactions
-// from offset 32 to end of file, rebuilding the RAM index and repairing any torn tail.
+// starting immediately after the 32-byte FileHeader. If an incomplete transaction
+// is encountered at EOF, it truncates the torn write (if not read-only).
 func (db *DB) recoverAndRepairLocked() (OpenInfo, error) {
 	fi, err := db.file.Stat()
 	if err != nil {
-		return OpenInfo{}, err
+		return OpenInfo{}, fmt.Errorf("stat failed during recovery: %w", err)
 	}
 	fileSize := fi.Size()
+
 	offset := int64(FileHeaderSize)
-	var lastTxID uint64
 	var txCount uint64
+	var lastTxID uint64
 
 	for offset < fileSize {
-		// Attempt reading TxnHeader
+		// Read TxnHeader
 		if offset+int64(TxnHeaderSize) > fileSize {
-			// Incomplete tail header
+			// Incomplete transaction header at EOF
 			break
 		}
-		headerBuf := make([]byte, TxnHeaderSize)
-		if err := ReadAtFull(db.file, headerBuf, offset); err != nil {
+		txnHeaderBuf := make([]byte, TxnHeaderSize)
+		if err := ReadAtFull(db.file, txnHeaderBuf, offset); err != nil {
 			break
 		}
-		txnHeader, err := DecodeTxnHeader(headerBuf)
+		txnHeader, err := DecodeTxnHeader(txnHeaderBuf)
 		if err != nil {
-			// Non-transaction bytes or corrupt header
+			break
+		}
+		if !bytes.Equal(txnHeader.Magic[:], []byte(TxnMagic)) {
 			break
 		}
 
@@ -408,7 +408,7 @@ func (db *DB) recoverAndRepairLocked() (OpenInfo, error) {
 			break
 		}
 
-		// Read footer
+		// Read CommitFooter
 		footerBuf := make([]byte, CommitFooterSize)
 		footerOffset := offset + int64(TxnHeaderSize) + int64(txnHeader.PayloadLen)
 		if err := ReadAtFull(db.file, footerBuf, footerOffset); err != nil {
@@ -418,31 +418,32 @@ func (db *DB) recoverAndRepairLocked() (OpenInfo, error) {
 		if err != nil {
 			break
 		}
-
-		// Verify matching TxID and total length
-		if footer.TxID != txnHeader.TxID || footer.TotalTxBytes != uint64(totalTxBytes) {
+		if !bytes.Equal(footer.Magic[:], []byte(FooterMagic)) {
+			break
+		}
+		if footer.TxID != txnHeader.TxID {
+			break
+		}
+		if footer.TotalTxBytes != uint64(totalTxBytes) {
 			break
 		}
 
-		// Verify dual CRC: TxnCRC over (TxnHeader + Payload)
+		// Check dual CRCs
 		h := crc32.NewIEEE()
-		h.Write(headerBuf)
+		h.Write(txnHeaderBuf)
 		h.Write(payloadBuf)
-		computedTxnCRC := h.Sum32()
-		if computedTxnCRC != footer.TxnCRC {
+		if h.Sum32() != footer.TxnCRC {
+			// Corrupt transaction
+			break
+		}
+		if crc32.ChecksumIEEE(footerBuf[0:28]) != footer.FooterCRC {
+			// Corrupt footer
 			break
 		}
 
-		// Verify FooterCRC over footer bytes [0..27]
-		computedFooterCRC := crc32.ChecksumIEEE(footerBuf[0:28])
-		if computedFooterCRC != footer.FooterCRC {
-			break
-		}
-
-		// Parse operations and collect index updates
-		payloadOffset := offset + int64(TxnHeaderSize)
+		// Transaction is valid. Replay operations into RAM index.
 		cur := 0
-		var updates []PendingIndexUpdate
+		var updates []IndexUpdate
 		validOps := true
 		for cur < len(payloadBuf) {
 			op, consumed, opErr := DecodeOp(payloadBuf[cur:])
@@ -450,17 +451,19 @@ func (db *DB) recoverAndRepairLocked() (OpenInfo, error) {
 				validOps = false
 				break
 			}
-			valOffset := payloadOffset + int64(cur) + int64(OpHeaderSize) + int64(len(op.Key))
-			if op.Kind == DeleteOp {
-				updates = append(updates, PendingIndexUpdate{Key: op.Key, IsDelete: true})
-			} else {
-				updates = append(updates, PendingIndexUpdate{
-					Key: op.Key,
-					Entry: IndexEntry{
-						ValueOffset: valOffset,
-						ValueLength: uint32(len(op.Value)),
-					},
-					IsDelete: false,
+			valOffsetInPayload := cur + 7 + len(op.Key)
+			absoluteValOffset := uint64(offset + int64(TxnHeaderSize) + int64(valOffsetInPayload))
+
+			if op.Kind == PutOp {
+				updates = append(updates, IndexUpdate{
+					Key:    op.Key,
+					Offset: absoluteValOffset,
+					Length: uint32(len(op.Value)),
+				})
+			} else if op.Kind == DeleteOp {
+				updates = append(updates, IndexUpdate{
+					Key:      op.Key,
+					IsDelete: true,
 				})
 			}
 			cur += consumed
@@ -469,29 +472,25 @@ func (db *DB) recoverAndRepairLocked() (OpenInfo, error) {
 			break
 		}
 
-		// Apply updates to index
 		db.index.ApplyUpdates(updates)
 		lastTxID = txnHeader.TxID
 		txCount++
 		offset += totalTxBytes
 	}
 
-	var repairedBytes uint64
-
-	// If there is an incomplete or torn tail past the last valid committed transaction:
-	if fileSize > offset {
-		repairedBytes = uint64(fileSize - offset)
+	// Tail repair: if uncommitted or torn bytes exist past the last valid transaction
+	var repairedBytes int64
+	if offset < fileSize {
 		if db.readOnly {
-			// Cannot truncate in read-only mode; mark poisoned to prevent corrupted operation
-			db.poisoned = fmt.Errorf("%w: uncommitted tail of %d bytes present in read-only mode", ErrCorrupt, repairedBytes)
-		} else {
-			// Safely truncate the file to the last committed boundary
-			if err := TruncateFile(db.file, offset); err != nil {
-				return OpenInfo{}, fmt.Errorf("failed to truncate torn tail at offset %d: %w", offset, err)
-			}
-			if err := SyncFile(db.file); err != nil {
-				return OpenInfo{}, fmt.Errorf("failed to sync file after tail truncation: %w", err)
-			}
+			// In read-only mode, cannot truncate. Return ErrCorrupt if uncommitted bytes exist
+			return OpenInfo{}, fmt.Errorf("%w: read-only database contains incomplete or corrupt tail at offset %d", ErrCorrupt, offset)
+		}
+		repairedBytes = fileSize - offset
+		if err := TruncateFile(db.file, offset); err != nil {
+			return OpenInfo{}, fmt.Errorf("failed to truncate corrupt tail at offset %d: %w", offset, err)
+		}
+		if err := SyncFile(db.file); err != nil {
+			return OpenInfo{}, fmt.Errorf("failed to sync truncated database: %w", err)
 		}
 	}
 
@@ -501,9 +500,8 @@ func (db *DB) recoverAndRepairLocked() (OpenInfo, error) {
 
 	return OpenInfo{
 		Recreated:             false,
+		LiveKeyCount:          db.index.Count(),
 		RecoveredTransactions: txCount,
-		LastTxID:              lastTxID,
-		LiveKeyCount:          uint64(db.index.Len()),
-		RepairedTailBytes:     repairedBytes,
+		RepairedBytes:         repairedBytes,
 	}, nil
 }
