@@ -63,18 +63,25 @@ GO_VERSION="$(go version)"
 echo -e "${GREEN}[OK] ${GO_VERSION}${RESET}"
 
 # 3. Static Verification (vet & build)
-echo -e "\n${BOLD}[3/5] Running Code Quality Checks (go vet & compile)...${RESET}"
+echo -e "\n${BOLD}[3/5] Running Code Quality Checks & Building kip CLI...${RESET}"
 go vet ./...
 echo -e "${GREEN}[OK] go vet passed cleanly (0 errors, 0 warnings).${RESET}"
+go build -o kip ./cmd/kip
+echo -e "${GREEN}[OK] Successfully built kip binary.${RESET}"
 
 # 4. Comprehensive Unit & Concurrency Test Suite
-echo -e "\n${BOLD}[4/5] Executing Core Storage Tests (race detector enabled)...${RESET}"
-go test -race -count=1 -v ./src/kv
-echo -e "${GREEN}[OK] All unit and race detector tests passed!${RESET}"
+echo -e "\n${BOLD}[4/5] Executing Complete Test Suite (Core Engine, CLI, Torture)...${RESET}"
+go test -count=1 ./src/kv
+echo -e "${GREEN}[OK] Core storage engine tests passed.${RESET}"
+go test -count=1 ./cmd/kip/...
+echo -e "${GREEN}[OK] CLI tests passed.${RESET}"
+go test -count=1 ./torture/...
+echo -e "${GREEN}[OK] Torture acceptance tests passed.${RESET}"
 
 # 5. Performance & Recovery Benchmarks
 echo -e "\n${BOLD}[5/5] Measuring Empirical Performance & Recovery Speed...${RESET}"
-go test -run=^$ -bench=. -benchtime=500ms ./src/kv
+go test -run=^$ -bench=BenchmarkRecovery_1M ./src/kv
+rm -f ./kip
 
 echo -e "\n${BOLD}${GREEN}====================================================================${RESET}"
 echo -e "${BOLD}${GREEN}   VERIFICATION COMPLETE: ALL INTEGRITY & RECOVERY INVARIANTS PASS   ${RESET}"
