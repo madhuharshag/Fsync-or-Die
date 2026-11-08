@@ -3,7 +3,7 @@
 
 **Project:** Fsync-or-Die (`kip`)  
 **Tagline:** *“Don’t Trust the Process. Trust the Proof.”*  
-**Repository:** [github.com/madhuharshag/Team-Innovexa](https://github.com/madhuharshag/Team-Innovexa)  
+**Repository:** [github.com/madhuharshag/Fsync-or-Die](https://github.com/madhuharshag/Fsync-or-Die)  
 **Lead Author:** Member 1 — Tech Lead + Core Storage Engineer + Technical Verification Lead  
 **Document Status:** Release Authoritative (`main`)  
 **Audience:** Hackathon Technical Judges, Database Architects & Systems Engineers  
@@ -46,7 +46,7 @@ A crash-resilient database must clearly delineate what failure modes it guarante
 
 ## 2. Transaction Failure Points (P1 through P7)
 
-Every mutation executed in [`src/kv/put_delete.go`](file:///Users/madhuharsha/Core-Storage/Team-Innovexa/src/kv/put_delete.go) traverses 7 distinct execution stages. Here is the exact analysis of what occurs if a crash strikes at each point:
+Every mutation executed in [`src/kv/put_delete.go`](src/kv/put_delete.go) traverses 7 distinct execution stages. Here is the exact analysis of what occurs if a crash strikes at each point:
 
 ```
 [Start] --> P1 --> [Write TxnHdr] --> P2 --> [Write Payload] --> P3 --> [Write Footer] --> P4 --> [SyncFile] --> P5 --> [Publish Index] --> P6 --> [Return ACK] --> P7
@@ -143,7 +143,7 @@ Compaction replaces the log file without stopping concurrent read operations:
 
 ## 6. Capacity Exhaustion & Scenario E5 Policy
 
-When `MaxFileBytes` is configured, database capacity is strictly governed by [`src/kv/capacity.go`](file:///Users/madhuharsha/Core-Storage/Team-Innovexa/src/kv/capacity.go):
+When `MaxFileBytes` is configured, database capacity is strictly governed by [`src/kv/capacity.go`](src/kv/capacity.go):
 
 ### The Deletion Paradox (Scenario E5):
 - In an append-only database, `Delete(key)` does not free disk space; it writes an immutable `DeleteOp` tombstone record.
@@ -156,7 +156,7 @@ When `MaxFileBytes` is configured, database capacity is strictly governed by [`s
 3. **Zero Disk Bytes Appended:** File size does not grow by a single byte past the configured limit.
 4. **Resolution Path:** The operator must run `kip compact <path>` to reclaim space occupied by overwritten versions and previous tombstones before new deletions can be appended.
 
-*(For full architectural evaluation of alternative Option B Headroom reservation, see [`E5_CAPACITY_DELETION_POLICY_REVIEW.md`](file:///Users/madhuharsha/Core-Storage/Team-Innovexa/E5_CAPACITY_DELETION_POLICY_REVIEW.md)).*
+*(For full architectural evaluation of alternative Option B Headroom reservation, see [`E5_CAPACITY_DELETION_POLICY_REVIEW.md`](E5_CAPACITY_DELETION_POLICY_REVIEW.md)).*
 
 ---
 

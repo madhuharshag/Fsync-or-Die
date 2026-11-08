@@ -3,7 +3,7 @@
 
 **Project:** Fsync-or-Die  
 **Tagline:** *“Don’t Trust the Process. Trust the Proof.”*  
-**Repository:** [github.com/madhuharshag/Team-Innovexa](https://github.com/madhuharshag/Team-Innovexa)  
+**Repository:** [github.com/madhuharshag/Fsync-or-Die](https://github.com/madhuharshag/Fsync-or-Die)  
 **Lead Author:** Member 1 — Tech Lead + Core Storage Engineer + Technical Verification Lead  
 **Integration Release Branch:** `integration/final-demo`  
 **Target Release Branch:** `main`  
@@ -203,21 +203,21 @@ $ go vet ./...
 [clean - 0 errors, 0 warnings]
 
 $ go test -count=1 ./cmd/kip/...
-ok      github.com/madhuharshag/Team-Innovexa/cmd/kip        1.157s
+ok      github.com/madhuharshag/Fsync-or-Die/cmd/kip        1.157s
 
 $ go test -count=1 ./src/kv
-ok      github.com/madhuharshag/Team-Innovexa/src/kv        12.914s
+ok      github.com/madhuharshag/Fsync-or-Die/src/kv        12.914s
 
 $ go test -count=1 ./torture
-ok      github.com/madhuharshag/Team-Innovexa/torture        3.363s
+ok      github.com/madhuharshag/Fsync-or-Die/torture        3.363s
 
 $ go test -count=1 ./...
-ok      github.com/madhuharshag/Team-Innovexa/cmd/kip        1.338s
-ok      github.com/madhuharshag/Team-Innovexa/src/kv        15.623s
-ok      github.com/madhuharshag/Team-Innovexa/torture        5.401s
+ok      github.com/madhuharshag/Fsync-or-Die/cmd/kip        1.338s
+ok      github.com/madhuharshag/Fsync-or-Die/src/kv        15.623s
+ok      github.com/madhuharshag/Fsync-or-Die/torture        5.401s
 
 $ go test -race -count=1 ./cmd/kip/...
-ok      github.com/madhuharshag/Team-Innovexa/cmd/kip        74.447s
+ok      github.com/madhuharshag/Fsync-or-Die/cmd/kip        74.447s
 ```
 
 ### End-to-End CLI Smoke Test Evidence

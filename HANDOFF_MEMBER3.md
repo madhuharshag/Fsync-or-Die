@@ -44,7 +44,7 @@ flowchart TD
 
     subgraph Child["Child Subprocess (torture/worker.go)"]
         Worker["Worker Main Loop\n(--worker / TORTURE_WORKER=1)"]
-        Engine["Database Engine\n(github.com/madhuharshag/Team-Innovexa/src/kv)"]
+        Engine["Database Engine\n(github.com/madhuharshag/Fsync-or-Die/src/kv)"]
         DBFile[("data.kip\n(Authoritative DB)")]
         Worker --> Engine --> DBFile
     end

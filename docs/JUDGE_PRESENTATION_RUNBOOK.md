@@ -3,7 +3,7 @@
 
 **Project:** Fsync-or-Die (`kip`)  
 **Tagline:** *“Don’t Trust the Process. Trust the Proof.”*  
-**Repository:** [github.com/madhuharshag/Team-Innovexa](https://github.com/madhuharshag/Team-Innovexa)  
+**Repository:** [github.com/madhuharshag/Fsync-or-Die](https://github.com/madhuharshag/Fsync-or-Die)  
 **Target Duration:** 15 Minutes Live Evaluation  
 **Demonstration Target:** Windows 11 AMD64 (Native PowerShell or WSL2 Ubuntu)  
 

@@ -1,7 +1,7 @@
 # Fsync-or-Die — Member 1 Technical Handoff
 **Role:** Member 1 — Tech Lead + Core Storage Engineer  
 **Branch:** `feat/storage-core`  
-**Package:** `github.com/madhuharshag/Team-Innovexa/src/kv` (`kv`)  
+**Package:** `github.com/madhuharshag/Fsync-or-Die/src/kv` (`kv`)  
 **Status:** IMPLEMENTED AND EXECUTED (Darwin arm64 — 31 top-level unit/integration tests PASS, 0 race warnings, 0 vet issues); EMPIRICAL RECOVERY BENCHMARKED (13.4 ms for 50,000 keys); CROSS-COMPILED (Linux amd64/arm64, Windows amd64); RUNTIME PENDING WSL2 DEMO MACHINE VERIFICATION.
 
 ---
@@ -110,7 +110,7 @@ Offset  Size  Field
 
 ### Public API Usage:
 ```go
-import "github.com/madhuharshag/Team-Innovexa/src/kv"
+import "github.com/madhuharshag/Fsync-or-Die/src/kv"
 
 // Open database
 engine, info, err := kv.Open("data.kip", kv.Options{

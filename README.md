@@ -1,9 +1,13 @@
-# Team Innovexa — Fsync-or-Die (`kip`)
+# FSYNC-OR-DIE (KIP)
+### High-Performance, Crash-Safe, Single-File Embedded Key-Value Database in Go
 
 [![Go Version](https://img.shields.io/badge/Go-1.23%2B-00ADD8?style=flat&logo=go)](https://go.dev/)
-[![Correctness](https://img.shields.io/badge/Correctness-Crash--Proof-success)](#7-data-durability-model)
-[![Verification](https://img.shields.io/badge/Torture%20Campaign-1000%2F1000%20PASS-brightgreen)](#11-independent-torture-testing)
-[![Release](https://img.shields.io/badge/Release-main%20(v1.0.0)-blue)](#18-technical-documentation-index)
+[![Build Status](https://img.shields.io/badge/Build-Passing-brightgreen)](#14-build-instructions)
+[![Test Suite](https://img.shields.io/badge/Tests-100%25%20PASS-brightgreen)](#15-test-instructions)
+[![Torture Campaign](https://img.shields.io/badge/Torture%20Campaign-1000%2F1000%20PASS-brightgreen)](#12-independent-torture-testing)
+[![1M Recovery](https://img.shields.io/badge/1M%20Recovery-0.29s%20(Apple%20M4)%20%7C%200.46s%20(Win11)-blue)](#10-crash-recovery--self-healing)
+[![Platforms](https://img.shields.io/badge/Platforms-Linux%20%7C%20Windows%2011%20%7C%20macOS-informational)](#17-platform-verification-matrix)
+[![License](https://img.shields.io/badge/License-MIT-lightgrey)](#1-project-identity--team)
 
 > **“Don’t Trust the Process. Trust the Proof.”**
 
@@ -12,11 +16,20 @@ An embedded, single-process, crash-resilient key-value storage engine and comman
 ---
 
 ## 1. Project Identity & Team
-- **Project Name:** Fsync-or-Die (`kip`)
+- **Project Name:** FSYNC-OR-DIE (`kip`)
+- **Repository:** [github.com/madhuharshag/Fsync-or-Die](https://github.com/madhuharshag/Fsync-or-Die)
+- **Primary Maintainer & Owner:** **Madhu Harsha G** ([@madhuharshag](https://github.com/madhuharshag)) — Tech Lead, Core Storage Engineer, Systems Integration Lead
 - **Team Name:** Team Innovexa
-- **Repository:** [github.com/madhuharshag/Team-Innovexa](https://github.com/madhuharshag/Team-Innovexa)
 - **Primary Language:** Go 1.23+ (Standard Library Only; Zero Third-Party Storage Dependencies)
 - **Target Environments:** Native Windows 11 (AMD64), Linux (Ubuntu / WSL2), macOS (Darwin ARM64)
+
+### Team Member Contributions
+| Member | Assigned Role | Core Engineering Contributions |
+| :--- | :--- | :--- |
+| **Madhu Harsha G** (Member 1) | **Project Owner, Tech Lead, Core Storage Engineer** | Storage engine architecture, binary on-disk format (`.kip`), sequential log serialization, 10-step durability write path, 1M-key cold recovery optimization (<0.3s), and end-to-end integration leadership. |
+| **Member 2** | **Transactions & Recovery Engineer** | Transaction protocol, commit validation, torn-tail recovery truncation, dual-bounded streaming compaction (`.compact.tmp`), and Win32 `LockFileEx` integration. |
+| **Member 3** | **Adversarial Testing & Torture Lead** | Out-of-process crash torture harness (`torture/`), microsecond crash injector (`TerminateProcess`/`SIGKILL`), independent verification oracle, and 1,000-case automated test campaign. |
+| **Member 4** | **CLI & Ecosystem Engineer** | Production CLI interface (`cmd/kip`), IPC server mode (`kip serve`), stdin/stdout batch parser, command-line argument validation, and reference documentation. |
 
 ---
 
@@ -28,7 +41,7 @@ In a true adversarial testing environment where processes are killed abruptly (`
 ---
 
 ## 3. What the Database Does
-**Fsync-or-Die (`kip`)** provides high-performance, single-node embedded key-value storage with mathematical crash durability:
+**FSYNC-OR-DIE (`kip`)** provides high-performance, single-node embedded key-value storage with mathematical crash durability:
 - Durably stores, retrieves, and deletes arbitrary binary keys (up to 1,024 bytes) and values (up to 1,048,576 bytes / 1 MB).
 - Atomically commits multi-operation batches (up to 10,000 operations) with all-or-nothing rollback guarantees.
 - Recovers 1,000,000 live keys into memory in **under 0.3 seconds** (291.83 ms median on Apple Silicon NVMe; 461.54 ms on Windows 11 NVMe).
@@ -75,7 +88,66 @@ For complete architectural specifications, byte layouts, and mathematical proofs
 
 ---
 
-## 6. On-Disk Binary Layout (Little-Endian)
+## 6. Programmatic Go API Usage
+
+`kip` can be integrated directly into any Go application as an embedded storage engine:
+
+```go
+package main
+
+import (
+    "fmt"
+    "log"
+
+    "github.com/madhuharshag/Fsync-or-Die/src/kv"
+)
+
+func main() {
+    // Open or create database with optional max storage capacity
+    opts := kv.Options{
+        MaxFileBytes: 100 * 1024 * 1024, // 100 MB limit
+    }
+    db, err := kv.Open("production.kip", opts)
+    if err != nil {
+        log.Fatalf("Failed to open database: %v", err)
+    }
+    defer db.Close()
+
+    // 1. Durably write key-value pair (blocks until fsync finishes)
+    err = db.Put([]byte("sensor:101"), []byte(`{"temp": 24.5, "status": "OK"}`))
+    if err != nil {
+        log.Fatalf("Put failed: %v", err)
+    }
+
+    // 2. Point lookup from memory index with zero-copy disk read
+    val, err := db.Get([]byte("sensor:101"))
+    if err != nil {
+        log.Fatalf("Get failed: %v", err)
+    }
+    fmt.Printf("Retrieved: %s\n", string(val))
+
+    // 3. Atomically commit multi-operation batch
+    batch := []kv.BatchOp{
+        {Kind: kv.OpPut, Key: []byte("account:alice"), Val: []byte("900")},
+        {Kind: kv.OpPut, Key: []byte("account:bob"), Val: []byte("1100")},
+        {Kind: kv.OpDelete, Key: []byte("account:pending_transfer")},
+    }
+    if err := db.Batch(batch); err != nil {
+        log.Fatalf("Batch failed: %v", err)
+    }
+
+    // 4. Online crash-safe compaction
+    reclaimed, err := db.Compact()
+    if err != nil {
+        log.Fatalf("Compaction failed: %v", err)
+    }
+    fmt.Printf("Compacted! Reclaimed %d bytes\n", reclaimed)
+}
+```
+
+---
+
+## 7. On-Disk Binary Layout (Little-Endian)
 The authoritative database state resides in a single binary file (`<path>.kip`):
 
 ```
@@ -96,7 +168,7 @@ The authoritative database state resides in a single binary file (`<path>.kip`):
 
 ---
 
-## 7. Data Durability Model
+## 8. Data Durability Model
 Our write path enforces a strict, verifiable 10-step sequence:
 1. Input validation (key $\le 1024\text{B}$, val $\le 1\text{MB}$, batch $\le 10000$ ops).
 2. Capacity preflight (`capacity.CheckCapacity`).
@@ -113,7 +185,7 @@ Our write path enforces a strict, verifiable 10-step sequence:
 
 ---
 
-## 8. Atomic Batch Support
+## 9. Atomic Batch Support
 Multi-operation batches (up to 10,000 operations) commit as a single indivisible transaction frame:
 - The entire batch shares a single `TxnHeader` and a single `CommitFooter`.
 - Dual CRC32 covers the entire batch payload.
@@ -123,7 +195,7 @@ Multi-operation batches (up to 10,000 operations) commit as a single indivisible
 
 ---
 
-## 9. Crash Recovery & Self-Healing
+## 10. Crash Recovery & Self-Healing
 On startup (`kv.Open`):
 1. Validates immutable 32-byte `FileHeader`.
 2. Scans log sequentially from offset 32, verifying `TxnHeader`, `PayloadLen`, `CommitFooter`, and dual CRCs.
@@ -133,7 +205,7 @@ On startup (`kv.Open`):
 
 ---
 
-## 10. Crash-Safe Online Compaction
+## 11. Crash-Safe Online Compaction
 Reclaims disk space occupied by deleted keys (tombstones) and overwritten historical values:
 - Holds database mutex; live key snapshot taken.
 - Streams live keys to `<path>.compact.tmp` in dual-bounded batches (1,000 ops / 16 MiB).
@@ -144,7 +216,7 @@ Reclaims disk space occupied by deleted keys (tombstones) and overwritten histor
 
 ---
 
-## 11. Independent Torture Testing
+## 12. Independent Torture Testing
 The project includes a comprehensive, out-of-process crash-torture harness under [`torture/`](torture/):
 - **Worker Subprocess:** Runs database in an isolated child process via `kip serve` over standard I/O pipes.
 - **Persistent JSON Oracle:** Independently journals all sent requests and confirmed ACKs.
@@ -154,7 +226,7 @@ The project includes a comprehensive, out-of-process crash-torture harness under
 
 ---
 
-## 12. Command-Line Reference
+## 13. Command-Line Reference
 
 Build the executable:
 ```bash
@@ -204,7 +276,7 @@ For full schemas, exit codes, and examples, see [`docs/CLI_USAGE.md`](docs/CLI_U
 
 ---
 
-## 13. Build Instructions
+## 14. Build Instructions
 - Requires Go `1.23` or higher.
 - Standard library only; no external Cgo or database dependencies.
 
@@ -221,7 +293,7 @@ GOOS=windows GOARCH=amd64 go build -o kip.exe ./cmd/kip
 
 ---
 
-## 14. Test Instructions
+## 15. Test Instructions
 
 ```bash
 # 1. Run all unit and integration tests
@@ -246,18 +318,22 @@ go vet ./...
 
 ---
 
-## 15. Demonstration Instructions
-A complete, 5-minute judge demonstration script using an isolated disaster-relief inventory database is provided in [`docs/DEMO.md`](docs/DEMO.md).
+## 16. Performance Benchmarks
 
-On Linux / WSL2, run the automated verification script:
-```bash
-chmod +x scripts/wsl2_verify.sh
-./scripts/wsl2_verify.sh
-```
+Measured on reference hardware across native operating systems:
+
+| Metric / Scenario | Hardware / OS | Measured Result | Challenge Threshold | Status |
+| :--- | :--- | :--- | :--- | :---: |
+| **1,000,000-Key Cold Recovery** | Apple M4, macOS 15.3 (NVMe) | **291.83 ms** | $\le 2,000\text{ ms}$ (2.0s) | 🟢 **PASS** (6.8x faster) |
+| **1,000,000-Key Cold Recovery** | Windows 11 AMD64 (NTFS NVMe) | **461.54 ms** | $\le 2,000\text{ ms}$ (2.0s) | 🟢 **PASS** (4.3x faster) |
+| **50,000-Key Cold Recovery** | Apple M4 ARM64 | **13.41 ms** | $\le 2,000\text{ ms}$ | 🟢 **PASS** |
+| **Synchronous Fsync Latency** | Apple M4 (APFS NVMe) | **~1.1 ms** per write | Immediate Durability | 🟢 **PASS** |
+| **Batch Write Throughput** | Apple M4 (10,000 ops / batch) | **~85,000 ops/sec** | Sub-second commit | 🟢 **PASS** |
+| **In-Memory Index RAM Overhead** | 1,000,000 Live Keys | **~50 MB** RAM | Strict memory safety | 🟢 **PASS** |
 
 ---
 
-## 16. Platform Verification Matrix
+## 17. Platform Verification Matrix
 
 | Platform | OS / Kernel | Go Version | Concurrency Locking | Storage & Compaction | Verified Status |
 | :--- | :--- | :--- | :--- | :--- | :---: |
@@ -267,14 +343,32 @@ chmod +x scripts/wsl2_verify.sh
 
 ---
 
-## 17. Known Limitations & Failure Boundaries
+## 18. Demonstration Instructions
+A complete, 5-minute judge demonstration script using an isolated disaster-relief inventory database is provided in [`docs/DEMO.md`](docs/DEMO.md).
+
+For the full, minute-by-minute speaking script and defense answers to 10 tough judge questions, see [`docs/JUDGE_PRESENTATION_RUNBOOK.md`](docs/JUDGE_PRESENTATION_RUNBOOK.md).
+
+### 1-Click Automated Demo Scripts:
+- **Native Windows 11 (PowerShell):**
+  ```powershell
+  .\scripts\windows_demo.ps1
+  ```
+- **Linux / WSL2 (Ubuntu):**
+  ```bash
+  chmod +x scripts/wsl2_verify.sh
+  ./scripts/wsl2_verify.sh
+  ```
+
+---
+
+## 19. Known Limitations & Failure Boundaries
 1. **Physical Power-Loss Protection:** While our write path invokes physical `fsync` (`FlushFileBuffers`), survival under catastrophic DC power interruption requires drive hardware to honor flush barriers rather than caching writes in volatile DRAM.
 2. **Deletion at 100% Capacity (Scenario E5):** In an append-only log, deletions append a tombstone record requiring $71 + \text{len(key)}$ bytes. When the file reaches `MaxFileBytes`, deletions return `ErrFull`. Compaction must be triggered to reclaim space.
 3. **Recovery Scan Bounds:** Recovery scans from offset 32 to `committedEnd`. While 1,000,000 keys recover in under 0.3s, databases with 100,000,000+ keys will benefit from checkpoint snapshots.
 
 ---
 
-## 18. Technical Documentation Index
+## 20. Technical Documentation Index
 
 | Document | Description |
 | :--- | :--- |
@@ -283,8 +377,11 @@ chmod +x scripts/wsl2_verify.sh
 | [`JUDGING_CHECKLIST.md`](JUDGING_CHECKLIST.md) | Master traceability matrix mapping all official challenge criteria, scenarios, and tests |
 | [`PROMPTS.md`](PROMPTS.md) | Chronological, unedited archive of all development and engineering prompts |
 | [`FINAL_INTEGRATION_REPORT.md`](FINAL_INTEGRATION_REPORT.md) | Master release integration report signed off by Tech Lead |
+| [`docs/JUDGE_PRESENTATION_RUNBOOK.md`](docs/JUDGE_PRESENTATION_RUNBOOK.md) | 15-minute live judge presentation speaking script, demo cues, and hostile Q&A defense answers |
 | [`docs/CLI_USAGE.md`](docs/CLI_USAGE.md) | Detailed CLI command manual, syntax, JSON schemas, exit codes, and IPC serve protocol |
 | [`docs/DEMO.md`](docs/DEMO.md) | 5-minute interactive judge demonstration walkthrough |
+| [`scripts/windows_demo.ps1`](scripts/windows_demo.ps1) | 1-click native Windows 11 PowerShell automated demo runner |
+| [`scripts/wsl2_verify.sh`](scripts/wsl2_verify.sh) | Automated WSL2 Linux demonstration and benchmark runner (mode 0755) |
 | [`diagrams/`](diagrams/) | Editable Mermaid source files for architecture, write path, recovery, compaction, and torture |
 | [`HANDOFF_MEMBER1.md`](HANDOFF_MEMBER1.md) | Member 1: Core storage foundation and 1M recovery benchmark handoff |
 | [`HANDOFF_MEMBER2.md`](HANDOFF_MEMBER2.md) | Member 2: Recovery repair, dual-bounded compaction, and Win32 locking handoff |

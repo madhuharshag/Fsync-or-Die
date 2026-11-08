@@ -3,9 +3,9 @@
 
 **Project:** Fsync-or-Die (`kip`)  
 **Tagline:** *“Don’t Trust the Process. Trust the Proof.”*  
-**Repository:** [github.com/madhuharshag/Team-Innovexa](https://github.com/madhuharshag/Team-Innovexa)  
+**Repository:** [github.com/madhuharshag/Fsync-or-Die](https://github.com/madhuharshag/Fsync-or-Die)  
 **Lead Auditor:** Member 1 — Tech Lead + Core Storage Engineer + Release Organizer  
-**Target Release Baseline:** `origin/main` @ commit [`b74c79f`](https://github.com/madhuharshag/Team-Innovexa/commit/b74c79f)  
+**Target Release Baseline:** `origin/main` @ commit [`b74c79f`](https://github.com/madhuharshag/Fsync-or-Die/commit/b74c79f)  
 **Documentation Release Branch:** `docs/final-judging-pack`  
 **Date & Timestamp:** 2026-11-07 08:58:00 IST  
 
@@ -21,8 +21,8 @@ Every challenge-required documentation deliverable has been identified, audited,
 
 ## 2. Original Release Commit Inspected
 
-- **Authoritative Commit:** [`b74c79f`](https://github.com/madhuharshag/Team-Innovexa/commit/b74c79f) (`docs(release): publish definitive final integration and verification report`)
-- **Parent Merge Commit:** [`6a6ba38`](https://github.com/madhuharshag/Team-Innovexa/commit/6a6ba38) (`merge(release): integrate Team Innovexa Fsync-or-Die complete verified database`)
+- **Authoritative Commit:** [`b74c79f`](https://github.com/madhuharshag/Fsync-or-Die/commit/b74c79f) (`docs(release): publish definitive final integration and verification report`)
+- **Parent Merge Commit:** [`6a6ba38`](https://github.com/madhuharshag/Fsync-or-Die/commit/6a6ba38) (`merge(release): integrate Team Innovexa Fsync-or-Die complete verified database`)
 - **Baseline Integrity:** All four member contributions (`feat/storage-core`, `feat/transactions-recovery`, `feat/torture-harness`, `feat/cli-docs`) were fully unified and merged on `origin/main` prior to this documentation audit.
 
 ---
@@ -31,9 +31,9 @@ Every challenge-required documentation deliverable has been identified, audited,
 
 - **File Search Result:** A standalone PDF specification file (e.g. `challenge.pdf`) was not present in the cloned repository or parent working directories.
 - **Traceability Solution:** All official evaluation criteria, challenge scenario IDs (B1–B2, C1–C4, E1–E5, F1–F4, G1–G3, H1–H2, J1–J2), scoring metrics, and mandatory deliverables were reconstructed with exact fidelity from:
-  1. The canonical 18-field test execution schema in [`torture/campaign.go`](file:///Users/madhuharsha/Core-Storage/Team-Innovexa/torture/campaign.go).
-  2. Member 1–4 technical handoffs ([`HANDOFF_MEMBER1.md`](file:///Users/madhuharsha/Core-Storage/Team-Innovexa/HANDOFF_MEMBER1.md) through [`HANDOFF_MEMBER4.md`](file:///Users/madhuharsha/Core-Storage/Team-Innovexa/HANDOFF_MEMBER4.md)).
-  3. The 1,000-case automated verification campaign results ([`artifacts/1000_campaign/campaign_results.csv`](file:///Users/madhuharsha/Core-Storage/Team-Innovexa/artifacts/1000_campaign/campaign_results.csv)).
+  1. The canonical 18-field test execution schema in [`torture/campaign.go`](torture/campaign.go).
+  2. Member 1–4 technical handoffs ([`HANDOFF_MEMBER1.md`](HANDOFF_MEMBER1.md) through [`HANDOFF_MEMBER4.md`](HANDOFF_MEMBER4.md)).
+  3. The 1,000-case automated verification campaign results ([`artifacts/1000_campaign/campaign_results.csv`](artifacts/1000_campaign/campaign_results.csv)).
 
 ---
 
@@ -67,7 +67,7 @@ During the audit, cross-document link validation detected 29 broken links caused
 
 ## 6. Architecture Diagrams Created
 
-Six editable Mermaid source diagrams were authored in [`diagrams/`](file:///Users/madhuharsha/Core-Storage/Team-Innovexa/diagrams/):
+Six editable Mermaid source diagrams were authored in [`diagrams/`](diagrams/):
 1. **`diagrams/architecture.mmd`:** End-to-end component flow from CLI and torture harness down through the public engine API, process locking, transaction writer, capacity manager, RAM index, and disk files.
 2. **`diagrams/write-path.mmd`:** Strict 10-step sequence diagram illustrating input validation, capacity preflight, transaction header assembly, payload encoding, dual CRC computation, positioned append write, unconditional `fsync`, index publication, accounting, and return of `ACK`.
 3. **`diagrams/recovery-flow.mmd`:** Flowchart detailing `Open()` lifecycle, lock acquisition, `.compact.tmp` cleanup, header validation, sequential frame scan, dual CRC check, op decoding, and EOF torn tail truncation.
@@ -79,7 +79,7 @@ Six editable Mermaid source diagrams were authored in [`diagrams/`](file:///User
 
 ## 7. `BREAKING.md` Coverage Summary
 
-[`BREAKING.md`](file:///Users/madhuharsha/Core-Storage/Team-Innovexa/BREAKING.md) provides exhaustive coverage of database failure handling:
+[`BREAKING.md`](BREAKING.md) provides exhaustive coverage of database failure handling:
 - **Failure Model:** Explicitly distinguishes process termination (`kill -9`, `TerminateProcess`), operating system halts, short writes, torn blocks, physical power loss, and hardware write-cache boundaries.
 - **Transaction Failure Points (P1–P7):** Concrete analysis of crashes before write (P1), during header (P2), during payload (P3), during footer (P4), during `SyncFile` (P5), after sync before ACK (P6), and after ACK (P7).
 - **Batch Atomicity:** Proves why multi-operation batches (up to 10,000 ops) are all-or-nothing, with no intermediate commit markers.
@@ -92,7 +92,7 @@ Six editable Mermaid source diagrams were authored in [`diagrams/`](file:///User
 
 ## 8. `ARCHITECTURE.md` Proof Table Status
 
-[`ARCHITECTURE.md`](file:///Users/madhuharsha/Core-Storage/Team-Innovexa/ARCHITECTURE.md) contains:
+[`ARCHITECTURE.md`](ARCHITECTURE.md) contains:
 - **System Overview:** Architectural breakdown of CLI, engine API, append-only storage, binary format, CRC validation, RAM index, recovery, compaction, locking, and torture harness.
 - **32-Row Invariant & Proof Table:** Exactly 32 non-repetitive, verified rows mapping every invariant to its physical mechanism, code location, supporting test, and verification status.
 - **Three Mathematical Guarantee Proofs:**
@@ -104,7 +104,7 @@ Six editable Mermaid source diagrams were authored in [`diagrams/`](file:///User
 
 ## 9. `PROMPTS.md` Provenance and Completeness
 
-- **File:** [`PROMPTS.md`](file:///Users/madhuharsha/Core-Storage/Team-Innovexa/PROMPTS.md) (166,852 bytes).
+- **File:** [`PROMPTS.md`](PROMPTS.md) (166,852 bytes).
 - **Authenticity:** All 13 prompts were extracted directly from the persistent machine session transcript log (`transcript_full.jsonl`).
 - **Completeness:** Spans the entire engineering timeline:
   * Prompt 1: Initial Repository & Branch Switch (2026-11-06 07:08 UTC)
@@ -221,9 +221,9 @@ $ go vet ./...
 [clean - 0 errors, 0 warnings]
 
 $ go test -count=1 ./...
-ok      github.com/madhuharshag/Team-Innovexa/cmd/kip        2.113s
-ok      github.com/madhuharshag/Team-Innovexa/src/kv        15.392s
-ok      github.com/madhuharshag/Team-Innovexa/torture        5.611s
+ok      github.com/madhuharshag/Fsync-or-Die/cmd/kip        2.113s
+ok      github.com/madhuharshag/Fsync-or-Die/src/kv        15.392s
+ok      github.com/madhuharshag/Fsync-or-Die/torture        5.611s
 ```
 
 ---
@@ -231,7 +231,7 @@ ok      github.com/madhuharshag/Team-Innovexa/torture        5.611s
 ## 12. Git Release Hashes and Branch Status
 
 - **Working Branch:** `docs/final-judging-pack`
-- **Base Release Commit:** [`b74c79f`](https://github.com/madhuharshag/Team-Innovexa/commit/b74c79f)
+- **Base Release Commit:** [`b74c79f`](https://github.com/madhuharshag/Fsync-or-Die/commit/b74c79f)
 - **Status:** All documentation, diagrams, checklist, and link repairs are committed cleanly. Ready for merge to `main`.
 
 ---

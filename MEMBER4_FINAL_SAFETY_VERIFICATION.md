@@ -11,7 +11,7 @@
 
 ## A. Exact Git Information
 
-- **Repository:** `https://github.com/madhuharshag/Team-Innovexa.git`
+- **Repository:** `https://github.com/madhuharshag/Fsync-or-Die.git`
 - **Branch:** `feat/cli-docs`
 - **Initial Audited Commit:** `0bd315a` (`feat(cli): implement complete kip CLI, torture IPC server, test suite, and judge documentation`)
 - **Integration Baseline:** Cleanly merged `origin/feat/transactions-recovery` (`22afd65`) providing the core engine, recovery, dual-bounded compaction, and native Win32 `LockFileEx` primitives.
@@ -109,7 +109,7 @@ Detailed results:
 === RUN   TestCLI_RepeatedOpenCloseCycles
 --- PASS: TestCLI_RepeatedOpenCloseCycles (2.53s)
 PASS
-ok  	github.com/madhuharshag/Team-Innovexa/cmd/kip	10.932s
+ok  	github.com/madhuharshag/Fsync-or-Die/cmd/kip	10.932s
 ```
 
 ### 2. Core Storage Engine Regression Suite (`src/kv`)

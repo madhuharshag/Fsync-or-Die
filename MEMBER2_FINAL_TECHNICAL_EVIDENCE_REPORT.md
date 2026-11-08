@@ -8,7 +8,7 @@
 
 This report documents the completion of Member 2's core responsibilities and the absorbed reliability and torture-testing responsibilities for Project **Fsync-or-Die**. 
 
-All work was performed directly in repository `https://github.com/madhuharshag/Team-Innovexa` on assigned branch `feat/transactions-recovery` on native Windows 11 using the host Go toolchain (`go1.27.3 windows/386`).
+All work was performed directly in repository `https://github.com/madhuharshag/Fsync-or-Die` on assigned branch `feat/transactions-recovery` on native Windows 11 using the host Go toolchain (`go1.27.3 windows/386`).
 
 ### Key Accomplishments & Verified Status:
 1. **F4 One-Byte Truncation Test Corrected:** Eliminated the flawed assertion where acknowledged writes were discarded. Implemented a low-level test fixture simulating an unacknowledged trailing transaction; proved that all acknowledged data survives without partial or invented values (20/20 consecutive runs passed).
@@ -24,7 +24,7 @@ All work was performed directly in repository `https://github.com/madhuharshag/T
 ## 2. Repository and Environment Verification
 
 ```text
-Repository URL:      https://github.com/madhuharshag/Team-Innovexa.git
+Repository URL:      https://github.com/madhuharshag/Fsync-or-Die.git
 Assigned Branch:     feat/transactions-recovery
 Starting Commit:     3057b6636edc62d92582685fd4afa943e98f4678
 Host OS:             Microsoft Windows 11 (NT 10.0.26300.0, 64-bit AMD64)
@@ -203,7 +203,7 @@ Implemented in package `main` under `torture/`:
 === RUN   TestTorture_14_OracleIsIndependent                   --- PASS (0.00s)
 === RUN   TestTorture_15_DetectsDeliberateDataLoss             --- PASS (0.00s)
 PASS
-ok      github.com/madhuharshag/Team-Innovexa/torture    1.084s
+ok      github.com/madhuharshag/Fsync-or-Die/torture    1.084s
 ```
 
 ### CLI Torture Stress Run:

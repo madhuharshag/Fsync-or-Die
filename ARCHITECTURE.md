@@ -3,7 +3,7 @@
 
 **Project:** Fsync-or-Die (`kip`)  
 **Tagline:** *“Don’t Trust the Process. Trust the Proof.”*  
-**Repository:** [github.com/madhuharshag/Team-Innovexa](https://github.com/madhuharshag/Team-Innovexa)  
+**Repository:** [github.com/madhuharshag/Fsync-or-Die](https://github.com/madhuharshag/Fsync-or-Die)  
 **Lead Author:** Member 1 — Tech Lead + Core Storage Engineer + Technical Verification Lead  
 **Document Status:** Release Authoritative (`main`)  
 **Target Architecture:** Cross-Platform (Native Windows 11 AMD64, Linux WSL2, macOS Darwin ARM64)  
@@ -133,7 +133,7 @@ Each operation inside the payload is sequentially packed:
 
 ## 3. The Durability Write Path (Strict 10-Step Order)
 
-Durability correctness depends entirely on executing operations in an unvarying, verifiable sequence. The order implemented in [`src/kv/put_delete.go`](file:///Users/madhuharsha/Core-Storage/Team-Innovexa/src/kv/put_delete.go) is:
+Durability correctness depends entirely on executing operations in an unvarying, verifiable sequence. The order implemented in [`src/kv/put_delete.go`](src/kv/put_delete.go) is:
 
 1. **Input Validation:** Key length is checked ($1 \le \text{len(key)} \le 1024$ bytes), value length is checked ($0 \le \text{len(val)} \le 1,048,576$ bytes), and batch length is checked ($1 \le \text{len(ops)} \le 10,000$). If invalid, return `ErrInvalid`.
 2. **Capacity Preflight:** The total transaction size is calculated:
@@ -159,7 +159,7 @@ Durability correctness depends entirely on executing operations in an unvarying,
 
 ## 4. The Crash Recovery Path
 
-Recovery executes automatically inside `kv.Open()` ([`src/kv/db.go`](file:///Users/madhuharsha/Core-Storage/Team-Innovexa/src/kv/db.go#L371)):
+Recovery executes automatically inside `kv.Open()` ([`src/kv/db.go`](src/kv/db.go#L371)):
 
 ```
 [Offset 0: FileHeader (32B)] -> Validated Magic & Version
@@ -193,7 +193,7 @@ Recovery executes automatically inside `kv.Open()` ([`src/kv/db.go`](file:///Use
 
 ## 5. Crash-Safe Compaction Path
 
-Compaction reclaims dead space from deleted and overwritten keys without risking active data ([`src/kv/compaction.go`](file:///Users/madhuharsha/Core-Storage/Team-Innovexa/src/kv/compaction.go)):
+Compaction reclaims dead space from deleted and overwritten keys without risking active data ([`src/kv/compaction.go`](src/kv/compaction.go)):
 
 1. **Holding Mutex:** `db.mu.Lock()` prevents concurrent mutations during compaction.
 2. **Snapshot Live Entries:** `db.index.Snapshot()` extracts a clean slice of all active keys sorted lexicographically. Dead keys and old versions are excluded.

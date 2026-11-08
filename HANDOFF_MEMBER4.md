@@ -22,7 +22,7 @@ Member 4 has completed all assigned responsibilities for the **"Kill It and Prov
 
 ## 2. Git Information
 
-- **Repository:** `https://github.com/madhuharshag/Team-Innovexa.git`
+- **Repository:** `https://github.com/madhuharshag/Fsync-or-Die.git`
 - **Branch:** `feat/cli-docs`
 - **Tracking Remote:** `origin/feat/cli-docs`
 - **Baseline Integration Merge:** `origin/feat/transactions-recovery` (`22afd65`) cleanly merged to bring in Member 1's core storage engine and Member 2's recovery/compaction and Windows `LockFileEx` primitives without modifying shared interfaces.
@@ -116,18 +116,18 @@ All verification tests were executed directly on the local Windows environment:
 === RUN   TestCLI_ServeIPCProtocolComplete
 --- PASS: TestCLI_ServeIPCProtocolComplete (0.16s)
 PASS
-ok  	github.com/madhuharshag/Team-Innovexa/cmd/kip	4.838s
+ok  	github.com/madhuharshag/Fsync-or-Die/cmd/kip	4.838s
 ```
 
 ### B. Core Storage & Transactions Tests (`go test -count=1 ./src/kv`)
 ```text
-ok  	github.com/madhuharshag/Team-Innovexa/src/kv	11.079s
+ok  	github.com/madhuharshag/Fsync-or-Die/src/kv	11.079s
 ```
 *(All 56 unit, recovery, compaction, capacity, and subprocess tests PASS)*
 
 ### C. Torture Harness Tests (`go test -count=1 ./torture`)
 ```text
-ok  	github.com/madhuharshag/Team-Innovexa/torture	3.474s
+ok  	github.com/madhuharshag/Fsync-or-Die/torture	3.474s
 ```
 *(All 12 torture acceptance unit tests PASS)*
 

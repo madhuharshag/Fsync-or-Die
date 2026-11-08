@@ -1,4 +1,3 @@
-module github.com/madhuharshag/Team-Innovexa
+module github.com/madhuharshag/Fsync-or-Die
 
 go 1.23
-

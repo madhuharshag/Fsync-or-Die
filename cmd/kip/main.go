@@ -6,7 +6,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/madhuharshag/Team-Innovexa/src/kv"
+	"github.com/madhuharshag/Fsync-or-Die/src/kv"
 )
 
 // Exit codes conforming to the Fsync-or-Die CLI specification:

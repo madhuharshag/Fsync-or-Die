@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	"github.com/madhuharshag/Team-Innovexa/src/kv"
+	"github.com/madhuharshag/Fsync-or-Die/src/kv"
 )
 
 // WireOpJSON represents the JSON schema for batch operations.

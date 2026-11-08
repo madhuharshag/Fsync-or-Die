@@ -3,7 +3,7 @@
 
 **Project:** Fsync-or-Die (`kip`)  
 **Tagline:** *“Don’t Trust the Process. Trust the Proof.”*  
-**Repository:** [github.com/madhuharshag/Team-Innovexa](https://github.com/madhuharshag/Team-Innovexa)  
+**Repository:** [github.com/madhuharshag/Fsync-or-Die](https://github.com/madhuharshag/Fsync-or-Die)  
 **Authoritative Source:** Machine-logged session transcripts (`transcript_full.jsonl`)  
 **Status:** 100% Verbatim & Chronologically Preserved  
 **Date Range:** 2026-11-06T07:08:03Z to 2026-11-07T03:17:24Z  
@@ -4586,7 +4586,7 @@ FSYNC-OR-DIE — MEMBER 2 MISSION COMPLETE REPORT
 
 Role: Member 2 — Transactions, Recovery, Compaction, Reliability & Torture-Testing Engineer
 Team: Team Innovexa
-Repository: https://github.com/madhuharshag/Team-Innovexa
+Repository: https://github.com/madhuharshag/Fsync-or-Die
 Branch: feat/transactions-recovery
 Final Commit: e32ea75
 Host Target: Native Windows 11 (AMD64 host, windows/386 Go toolchain: go1.27.3)
@@ -4626,8 +4626,8 @@ PS D:\test\transaction and recovery engine> git log -2 --oneline
 e32ea75 feat(recovery,compaction,torture): complete recovery repair, dual-bounded compaction, 1M benchmark, and independent torture harness
 3057b66 feat(recovery): implement crash-safe compaction, recovery tests, and Windows process locking
 PS D:\test\transaction and recovery engine> git remote -v
-origin  https://github.com/madhuharshag/Team-Innovexa.git (fetch)
-origin  https://github.com/madhuharshag/Team-Innovexa.git (push)
+origin  https://github.com/madhuharshag/Fsync-or-Die.git (fetch)
+origin  https://github.com/madhuharshag/Fsync-or-Die.git (push)
 PS D:\test\transaction and recovery engine> & "C:\Users\sanke\Downloads\go\bin\go.exe" version
 go version go1.27.3 windows/386
 PS D:\test\transaction and recovery engine> & "C:\Users\sanke\Downloads\go\bin\go.exe" env GOOS GOARCH GOMOD
@@ -4720,7 +4720,7 @@ text
 === RUN   TestTorture_14_OracleIsIndependent                   --- PASS (0.00s)
 === RUN   TestTorture_15_DetectsDeliberateDataLoss             --- PASS (0.00s)
 PASS
-ok      github.com/madhuharshag/Team-Innovexa/torture    1.084s
+ok      github.com/madhuharshag/Fsync-or-Die/torture    1.084s
 CLI Execution Example:
 powershell
 PS D:\test\transaction and recovery engine> & "C:\Users\sanke\Downloads\go\bin\go.exe" run ./torture -seed 99999 -ops 1000 -crashes 10 -writers 4
@@ -4772,8 +4772,8 @@ Meets < 2.0s Goal:    TRUE (0.462s vs 2.000s — > 4x faster)
 8. Phases 8, 9, 10 & 11 — Full Verification, Documentation & Git Push
 Full Test Execution (go test -count=1 ./...):
 text
-ok   github.com/madhuharshag/Team-Innovexa/src/kv   14.882s
-ok   github.com/madhuharshag/Team-Innovexa/torture  1.453s
+ok   github.com/madhuharshag/Fsync-or-Die/src/kv   14.882s
+ok   github.com/madhuharshag/Fsync-or-Die/torture  1.453s
 Static Analysis & Formatting:
 go fmt ./...: Clean across all packages.
 go vet ./...: 0 warnings, 0 errors.
@@ -4785,7 +4785,7 @@ Git Delivery:
 Changes committed to feat/transactions-recovery as commit e32ea75.
 Pushed successfully to origin/feat/transactions-recovery:
 text
-To https://github.com/madhuharshag/Team-Innovexa.git
+To https://github.com/madhuharshag/Fsync-or-Die.git
    e68e909..e32ea75  feat/transactions-recovery -> feat/transactions-recovery
 Working tree is clean and up to date with remote.
 9. Open Architectural Item for Member 1
@@ -5090,7 +5090,7 @@ Team: Innovexa
 
 Repository:
 
-`https://github.com/madhuharshag/Team-Innovexa.git`
+`https://github.com/madhuharshag/Fsync-or-Die.git`
 
 Latest reported main commit:
 

@@ -1,15 +1,35 @@
-# Binaries
+# Binaries and build outputs
+/kip
+/cmd/kip/kip
 *.exe
 *.test
-/kip
+bin/
+dist/
 
-# Temporary Database & Lock Files
+# Test coverage & profiling
+*.out
+coverage.txt
+coverage.html
+*.prof
+
+# Temporary Database & Lock Files (runtime artifacts)
 *.kip
 *.kip.lock
 *.compact.tmp
 *.db
 *.log
+!artifacts/1000_campaign/*.log
 
 # OS & Editor
 .DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
 Thumbs.db
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
