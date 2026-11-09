@@ -5,8 +5,9 @@
 **Tagline:** *“Don’t Trust the Process. Trust the Proof.”*  
 **Repository:** [github.com/madhuharshag/Fsync-or-Die](https://github.com/madhuharshag/Fsync-or-Die)  
 **Author:** Documentation Auditor, Software Architect & Release Organizer (Tech Lead Authority)  
-**Target Baseline:** Branch `main` (commit `b74c79f` / `docs/final-judging-pack`)  
-**Date:** 2026-11-07  
+**Target Baseline:** Branch `main` (commit `5e9141a` / `v1.0.0-release`)  
+**Date:** 2026-11-09  
+**Last Verified:** 2026-11-09 (All suites passing; 1000/1000 campaign verified)  
 
 ---
 
